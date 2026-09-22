@@ -1,0 +1,459 @@
+@import 'tailwindcss';
+
+/* ══════════════════════════════════════════════════════════════════════════
+   NEXUS DESIGN SYSTEM
+   Dense, calm, keyboard-first. Built for people who live in this software
+   eight hours a day, so contrast is deliberate and motion is restrained.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* ── neutrals: a slightly cool graphite, never pure grey ─────────────── */
+  --color-ink-25:  #fbfbfc;
+  --color-ink-50:  #f7f8f9;
+  --color-ink-100: #eef0f3;
+  --color-ink-150: #e4e7ec;
+  --color-ink-200: #d8dce3;
+  --color-ink-300: #b9c0cb;
+  --color-ink-400: #8b95a5;
+  --color-ink-500: #667085;
+  --color-ink-600: #4b5565;
+  --color-ink-700: #364152;
+  --color-ink-800: #212936;
+  --color-ink-850: #182230;
+  --color-ink-900: #121926;
+  --color-ink-950: #0b1017;
+
+  /* ── accent ──────────────────────────────────────────────────────────── */
+  --color-brand-50:  #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --color-brand-800: #3730a3;
+  --color-brand-900: #312e81;
+
+  /* ── semantic ────────────────────────────────────────────────────────── */
+  --color-positive-50:  #ecfdf5;
+  --color-positive-500: #10b981;
+  --color-positive-600: #059669;
+  --color-positive-700: #047857;
+
+  --color-caution-50:  #fffbeb;
+  --color-caution-500: #f59e0b;
+  --color-caution-600: #d97706;
+  --color-caution-700: #b45309;
+
+  --color-critical-50:  #fef2f2;
+  --color-critical-500: #ef4444;
+  --color-critical-600: #dc2626;
+  --color-critical-700: #b91c1c;
+
+  --color-info-50:  #eff6ff;
+  --color-info-500: #3b82f6;
+  --color-info-600: #2563eb;
+
+  /* ── type ────────────────────────────────────────────────────────────── */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.5rem;
+
+  /* ── shape ───────────────────────────────────────────────────────────── */
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1.125rem;
+
+  /* ── elevation: layered and low-contrast, never a grey blur ──────────── */
+  --shadow-xs: 0 1px 2px 0 rgb(16 24 40 / 0.04);
+  --shadow-sm: 0 1px 2px 0 rgb(16 24 40 / 0.06), 0 1px 3px 0 rgb(16 24 40 / 0.04);
+  --shadow-md: 0 2px 4px -1px rgb(16 24 40 / 0.06), 0 4px 8px -2px rgb(16 24 40 / 0.06);
+  --shadow-lg: 0 4px 6px -2px rgb(16 24 40 / 0.04), 0 12px 16px -4px rgb(16 24 40 / 0.08);
+  --shadow-xl: 0 8px 8px -4px rgb(16 24 40 / 0.03), 0 20px 24px -4px rgb(16 24 40 / 0.1);
+  --shadow-pop: 0 0 0 1px rgb(16 24 40 / 0.05), 0 12px 32px -8px rgb(16 24 40 / 0.16);
+
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SURFACES — semantic variables so a component never hardcodes a palette step
+   and dark mode is one block, not a thousand `dark:` utilities.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* A faint warm tint keeps large empty areas from reading as dead grey,
+     without tipping into a colour cast. */
+  --surface-page: #f6f7f9;
+  --surface-raised: #ffffff;
+  --surface-sunken: var(--color-ink-100);
+  --surface-overlay: #ffffff;
+  --surface-hover: var(--color-ink-100);
+  --surface-active: var(--color-ink-150);
+  --surface-inverse: var(--color-ink-900);
+
+  --border-subtle: var(--color-ink-150);
+  --border-default: var(--color-ink-200);
+  --border-strong: var(--color-ink-300);
+  --border-focus: var(--color-brand-500);
+
+  --text-primary: var(--color-ink-900);
+  --text-secondary: var(--color-ink-600);
+  --text-tertiary: var(--color-ink-500);
+  --text-disabled: var(--color-ink-400);
+  --text-inverse: #ffffff;
+  --text-brand: var(--color-brand-600);
+
+  --ring-focus: 0 0 0 3px rgb(99 102 241 / 0.16);
+
+  /* Premium surface treatments. Cards sit on a soft gradient rather than a
+     flat fill, and hover lifts them with a tinted ring instead of a grey blur. */
+  --card-gradient: linear-gradient(180deg, #ffffff 0%, #fcfcfd 100%);
+  --border-accent: var(--color-brand-300);
+  --glow-brand: 0 8px 28px -10px rgb(79 70 229 / 0.35);
+  --sheen: linear-gradient(135deg, rgb(255 255 255 / 0.9) 0%, rgb(255 255 255 / 0) 60%);
+
+  --nav-width: 248px;
+  --nav-width-collapsed: 64px;
+  --topbar-height: 52px;
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --surface-page: var(--color-ink-950);
+  --surface-raised: var(--color-ink-900);
+  --surface-sunken: #080c12;
+  --surface-overlay: var(--color-ink-850);
+  --surface-hover: rgb(255 255 255 / 0.04);
+  --surface-active: rgb(255 255 255 / 0.07);
+  --surface-inverse: var(--color-ink-50);
+
+  --border-subtle: rgb(255 255 255 / 0.06);
+  --border-default: rgb(255 255 255 / 0.1);
+  --border-strong: rgb(255 255 255 / 0.16);
+
+  --text-primary: #f2f4f7;
+  --text-secondary: var(--color-ink-300);
+  --text-tertiary: var(--color-ink-400);
+  --text-disabled: var(--color-ink-500);
+  --text-inverse: var(--color-ink-950);
+  --text-brand: var(--color-brand-400);
+
+  --ring-focus: 0 0 0 3px rgb(129 140 248 / 0.22);
+
+  --card-gradient: linear-gradient(180deg, rgb(255 255 255 / 0.035) 0%, rgb(255 255 255 / 0.012) 100%);
+  --border-accent: rgb(129 140 248 / 0.45);
+  --glow-brand: 0 8px 32px -10px rgb(99 102 241 / 0.5);
+  --sheen: linear-gradient(135deg, rgb(255 255 255 / 0.06) 0%, rgb(255 255 255 / 0) 60%);
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-md: 0 2px 6px -1px rgb(0 0 0 / 0.4);
+  --shadow-lg: 0 8px 24px -6px rgb(0 0 0 / 0.5);
+  --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.06), 0 16px 40px -12px rgb(0 0 0 / 0.7);
+
+  color-scheme: dark;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BASE
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Everything here sits in @layer base so utility classes still win. Unlayered
+   rules would beat Tailwind's layers outright — a `text-white` on a heading
+   would silently lose to a bare `h2 { color }`. */
+@layer base {
+  * {
+    border-color: var(--border-subtle);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background: var(--surface-page);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Numbers in tables must line up. Always. */
+  .tabular,
+  table,
+  .metric {
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1, h2, h3, h4 {
+    letter-spacing: -0.014em;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--ring-focus);
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background: var(--color-brand-200);
+    color: var(--color-ink-900);
+  }
+
+  :root[data-theme='dark'] ::selection {
+    background: var(--color-brand-800);
+    color: #fff;
+  }
+}
+
+/* ── scrollbars: present, but quiet ──────────────────────────────────────── */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); background-clip: content-box; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   UTILITIES
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@utility surface {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+@utility text-muted { color: var(--text-secondary); }
+@utility text-faint { color: var(--text-tertiary); }
+
+/* A hairline that survives both themes without looking heavy. */
+@utility hairline {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+@utility grid-bg {
+  background-image:
+    linear-gradient(to right, var(--border-subtle) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border-subtle) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOTION — short, eased, and never in the way.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.97) translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+.animate-rise { animation: rise 0.24s var(--ease-out-quint) both; }
+.animate-pop { animation: pop 0.16s var(--ease-out-quint) both; }
+.animate-fade { animation: fade-in 0.18s ease both; }
+
+.stagger > * { animation: rise 0.28s var(--ease-out-quint) both; }
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 40ms; }
+.stagger > *:nth-child(3) { animation-delay: 80ms; }
+.stagger > *:nth-child(4) { animation-delay: 120ms; }
+.stagger > *:nth-child(5) { animation-delay: 160ms; }
+.stagger > *:nth-child(6) { animation-delay: 200ms; }
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.35), transparent);
+  animation: shimmer 1.6s infinite;
+}
+
+:root[data-theme='dark'] .skeleton::after {
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.05), transparent);
+}
+
+/* Switching theme repaints hundreds of colours at once. Without this, every
+   transitioned border and background crossfades for 200ms and the whole UI
+   appears to smear. The attribute is set for a single frame by useTheme(). */
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PREMIUM SURFACES
+   The difference between "a white card on grey" and something that feels
+   built: a gradient fill, a tinted hairline ring, and a lift on hover.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The hairline is a real border rather than a box-shadow ring: borders
+   re-resolve reliably when the theme token changes at runtime, and they
+   survive fractional device pixel ratios that can swallow a 1px shadow. */
+@utility panel {
+  background: var(--card-gradient);
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+}
+
+@utility panel-hover {
+  transition:
+    box-shadow 220ms var(--ease-out-quint),
+    border-color 220ms var(--ease-out-quint),
+    transform 220ms var(--ease-out-quint);
+}
+
+.panel-hover:hover {
+  border-color: var(--border-accent);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+}
+
+/* A hairline that catches the light along the top edge of a raised surface. */
+@utility sheen {
+  position: relative;
+  isolation: isolate;
+}
+
+.sheen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--sheen);
+  opacity: 0.7;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Brand-tinted call to action with real depth. */
+@utility cta {
+  background: linear-gradient(180deg, var(--color-brand-500) 0%, var(--color-brand-600) 100%);
+  box-shadow: var(--glow-brand), inset 0 1px 0 0 rgb(255 255 255 / 0.18);
+  color: #fff;
+}
+
+/* Ambient colour behind hero sections — replaces flat grey backdrops. */
+@utility aurora {
+  position: relative;
+  overflow: hidden;
+}
+
+.aurora::before,
+.aurora::after {
+  content: '';
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(110px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.aurora::before {
+  width: 540px;
+  height: 540px;
+  top: -220px;
+  left: -140px;
+  background: rgb(99 102 241 / 0.28);
+}
+
+.aurora::after {
+  width: 460px;
+  height: 460px;
+  top: -120px;
+  right: -120px;
+  background: rgb(14 165 233 / 0.22);
+}
+
+:root[data-theme='dark'] .aurora::before { background: rgb(99 102 241 / 0.3); }
+:root[data-theme='dark'] .aurora::after  { background: rgb(14 165 233 / 0.22); }
+
+/* Faint grid used behind hero and empty states. */
+@utility fine-grid {
+  background-image:
+    linear-gradient(to right, rgb(16 24 40 / 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(16 24 40 / 0.045) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+}
+
+:root[data-theme='dark'] .fine-grid {
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px);
+}
+
+/* Text that carries the brand gradient — used sparingly, on hero headlines. */
+@utility gradient-text {
+  background: linear-gradient(120deg, var(--color-ink-900) 20%, var(--color-brand-600) 60%, #0ea5e9 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+:root[data-theme='dark'] .gradient-text {
+  background: linear-gradient(120deg, #ffffff 20%, var(--color-brand-300) 60%, #7dd3fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: none; }
+}

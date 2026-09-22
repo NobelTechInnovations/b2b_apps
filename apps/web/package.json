@@ -1,0 +1,25 @@
+{
+  "name": "@nexus/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --turbopack -p 3000",
+    "build": "NEXT_DIST_DIR=.next-build next build",
+    "start": "NEXT_DIST_DIR=.next-build next start -p 3000",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.468.0",
+    "next": "^15.1.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.6.0",
+    "@nexus/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "tailwindcss": "^4.0.0"
+  }
+}

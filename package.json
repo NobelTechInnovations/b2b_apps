@@ -1,0 +1,24 @@
+{
+  "name": "nexus-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:reset": "docker compose -f infra/docker-compose.yml down -v && pnpm infra:up",
+    "migrate": "node scripts/migrate-all.js",
+    "seed": "node scripts/seed.js",
+    "dev": "node scripts/dev.js",
+    "lint": "eslint .",
+    "test": "node --test services/*/test/**/*.test.js",
+    "smoke": "node scripts/smoke.js"
+  },
+  "devDependencies": {
+    "eslint": "^9.17.0"
+  },
+  "packageManager": "pnpm@11.20.0"
+}
