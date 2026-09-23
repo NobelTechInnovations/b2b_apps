@@ -1,4 +1,4 @@
-import { APPS, APP_CATEGORIES } from '@nexus/contracts';
+import { APPS, APP_CATEGORIES, PORTAL_ROLES } from '@nexus/contracts';
 
 /**
  * GET /api/me/workspace — one call that boots the entire frontend.
@@ -64,6 +64,21 @@ export async function workspaceRoutes(app) {
       )
       .filter((widget) => !widget.permission || can(widget.permission));
 
+    /*
+     * A portal member holds only `self` permissions, so `navigation` above
+     * resolves to nothing and they would otherwise land on an empty dashboard.
+     * Saying so here — rather than inferring it in the browser from an empty
+     * sidebar — lets the shell send them straight to their own screen.
+     *
+     * Someone who holds the employee role AND a working role is not a portal
+     * user: they have a workspace to use, and the portal is just one more
+     * place they can go.
+     */
+    const portalOnly =
+      !authorization.isOwner &&
+      authorization.roles.length > 0 &&
+      authorization.roles.every((role) => PORTAL_ROLES.has(role));
+
     return {
       data: {
         user: { id: userId, email, name },
@@ -72,7 +87,9 @@ export async function workspaceRoutes(app) {
           id: authorization.memberId,
           roles: authorization.roles,
           is_owner: authorization.isOwner,
+          portal_only: portalOnly,
         },
+        portal_only: portalOnly,
         needs_onboarding: false,
         subscription: entitlements.subscription,
         apps: [...entitlements.apps].filter((slug) => slug !== 'core'),

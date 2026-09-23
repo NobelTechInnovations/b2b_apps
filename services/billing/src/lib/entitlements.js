@@ -108,10 +108,16 @@ export async function readEntitlements(db, orgId) {
     [orgId],
   );
 
+  // The plan's limits ride along, so consumers such as the documents service
+  // can enforce the allowance the customer actually pays for rather than
+  // falling back to a default.
   const subscription = await db.one(
-    `SELECT id, plan_slug, status, billing_cycle, currency, seats,
-            trial_ends_at, current_period_end, cancel_at_period_end
-       FROM subscriptions WHERE org_id = $1 AND status <> 'canceled'`,
+    `SELECT s.id, s.plan_slug, s.status, s.billing_cycle, s.currency, s.seats,
+            s.trial_ends_at, s.current_period_end, s.cancel_at_period_end,
+            p.storage_gb, p.included_users, p.max_users, p.name AS plan_name
+       FROM subscriptions s
+       JOIN plans p ON p.slug = s.plan_slug
+      WHERE s.org_id = $1 AND s.status <> 'canceled'`,
     [orgId],
   );
 

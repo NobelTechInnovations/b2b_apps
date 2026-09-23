@@ -62,7 +62,7 @@ export async function authRoutes(app) {
           ['email', 'password', 'name'],
         ),
       },
-      config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
+      config: { rateLimit: { max: config.registerPerHour, timeWindow: '1 hour' } },
     },
     async (request, reply) => {
       const email = normalizeEmail(request.body.email);
@@ -478,7 +478,7 @@ export async function authRoutes(app) {
     '/auth/reset-password',
     {
       schema: { body: body({ token: v.text(200, 10), password: v.text(200, 8) }, ['token', 'password']) },
-      config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
+      config: { rateLimit: { max: config.registerPerHour, timeWindow: '1 hour' } },
     },
     async (request, reply) => {
       const record = await db.one(

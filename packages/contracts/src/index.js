@@ -13,4 +13,7 @@ export {
   dependentsOf,
 } from './apps.js';
 export { EVENTS, envelope, isKnownEvent } from './events.js';
-export { SYSTEM_ROLES, PERMISSION_ACTIONS } from './roles.js';
+export {
+  IMPORT_TARGETS, FIELD_TYPES, importTarget, importTargetsFor, suggestMapping,
+} from './import-targets.js';
+export { SYSTEM_ROLES, PERMISSION_ACTIONS, PORTAL_ROLES } from './roles.js';

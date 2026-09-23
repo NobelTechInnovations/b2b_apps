@@ -1,0 +1,16 @@
+{
+  "name": "@nexus/documents",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": { "dev": "node --watch src/index.js", "start": "node src/index.js" },
+  "dependencies": {
+    "@fastify/multipart": "^9.0.1",
+    "@nexus/bus": "workspace:*",
+    "@nexus/contracts": "workspace:*",
+    "@nexus/db-kit": "workspace:*",
+    "@nexus/service-kit": "workspace:*",
+    "exceljs": "^4.4.0"
+  }
+}

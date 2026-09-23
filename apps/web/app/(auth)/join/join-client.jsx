@@ -23,7 +23,7 @@ export default function JoinClient() {
       return;
     }
     api
-      .get(`/invitations/preview/${encodeURIComponent(token)}`)
+      .get(`/invite/${encodeURIComponent(token)}`)
       .then((response) => {
         setInvitation(response.data);
         setState('ready');
@@ -35,9 +35,16 @@ export default function JoinClient() {
     setBusy(true);
     setError(null);
     try {
-      await api.post('/invitations/accept', { token });
+      // A 401 here means "no account yet", which is a route, not a failure —
+      // so handle it rather than being bounced to the sign-in page.
+      await api.post('/invitations/accept', { token }, { redirectOnUnauthorized: false });
       await api.post('/auth/refresh', {});
-      router.push('/dashboard');
+
+      // An employee invited to the portal has no apps to land on, so the
+      // dashboard would be an empty frame. Ask who they are and route on that
+      // rather than sending everybody the same place.
+      const workspace = await api.get('/me/workspace').catch(() => null);
+      router.push(workspace?.data?.portal_only ? '/portal' : '/dashboard');
       router.refresh();
     } catch (err) {
       // Not signed in yet — send them through sign-up carrying the invitation.

@@ -7,6 +7,17 @@ const { Pool, types } = pg;
 types.setTypeParser(20, (v) => (Number.isSafeInteger(Number(v)) ? Number(v) : v)); // int8
 types.setTypeParser(1700, (v) => v); // numeric — money must never round-trip through float
 
+/**
+ * A `date` is a calendar date. It has no time and no time zone.
+ *
+ * By default pg parses it into a JS Date at LOCAL midnight, which
+ * JSON.stringify then serialises via toISOString() — so 2026-09-28 leaves the
+ * API as "2026-09-27T18:30:00.000Z" for anyone east of UTC, and every client
+ * renders the wrong day. Keep it as the string Postgres actually sent.
+ */
+types.setTypeParser(1082, (v) => v); // date
+types.setTypeParser(1182, (v) => v); // date[]
+
 function translate(error) {
   if (error?.code === '23505') return new UniqueViolation(error.constraint, error);
   return error;

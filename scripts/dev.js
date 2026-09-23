@@ -20,6 +20,10 @@ const SERVICES = [
   { name: 'gateway',  port: 4000, db: null,       colour: 34 },
   // Business apps. Ports match the registry order the gateway derives.
   { name: 'crm',      port: 4010, db: 'crm',      colour: 95 },
+  { name: 'hr',       port: 4030, db: 'hr',       colour: 92 },
+  { name: 'payroll',  port: 4031, db: 'payroll', colour: 93 },
+  { name: 'documents',port: 4036, db: 'documents',colour: 94 },
+  { name: 'invoicing',port: 4022, db: 'invoicing',colour: 96 },
 ];
 
 const WEB = { name: 'web', port: 3000, colour: 95 };

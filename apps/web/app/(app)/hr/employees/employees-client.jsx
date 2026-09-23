@@ -1,0 +1,547 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
+import {
+  Plus, Users, UserPlus, Clock, Mail, Phone, Network, LogOut, UserRound,
+} from 'lucide-react';
+import { api, ApiError } from '@/lib/api';
+import { cn } from '@/lib/cn';
+import { date, relativeTime } from '@/lib/format';
+import { Can, useWorkspace } from '@/lib/workspace';
+import { useToast } from '@/components/ui/toast';
+import { Button } from '@/components/ui/button';
+import { Input, Field, Select, Textarea } from '@/components/ui/input';
+import { Modal } from '@/components/ui/modal';
+import { Drawer, DetailGrid } from '@/components/data/drawer';
+import { ListToolbar, Pagination } from '@/components/data/list-shell';
+import { StatTile } from '@/components/data/stat-tile';
+import { Table, THead, TBody, TH, TR, TD, TableSkeleton } from '@/components/ui/table';
+import { Avatar, Badge, Card, EmptyState, PageHeader, Alert } from '@/components/ui/primitives';
+
+const STATUS_TONE = {
+  active: 'positive', on_probation: 'caution', on_notice: 'critical',
+  on_leave: 'info', exited: 'neutral',
+};
+
+const label = (value) => value?.replace(/_/g, ' ') ?? '—';
+
+export default function EmployeesClient() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const { can } = useWorkspace();
+
+  const [employees, setEmployees] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [meta, setMeta] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const [search, setSearch] = useState('');
+  const [filters, setFilters] = useState({});
+  const [page, setPage] = useState(1);
+  const [creating, setCreating] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+
+  // Search params are not available to the useState initialiser under
+  // Suspense, so deep links are applied here instead.
+  useEffect(() => {
+    if (params.get('new') === '1') setCreating(true);
+    const open = params.get('open');
+    if (open) setSelectedId(open);
+  }, [params]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await api.get('/hr/employees', {
+        query: { ...filters, q: search || undefined, page, limit: 25 },
+      });
+      setEmployees(response.data);
+      setMeta(response.meta);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not load employees.');
+    } finally {
+      setLoading(false);
+    }
+  }, [filters, search, page]);
+
+  useEffect(() => {
+    const timer = setTimeout(load, search ? 280 : 0);
+    return () => clearTimeout(timer);
+  }, [load, search]);
+
+  useEffect(() => {
+    api.get('/hr/departments').then((r) => setDepartments(r.data)).catch(() => setDepartments([]));
+  }, []);
+
+  const stats = meta?.stats;
+
+  const FILTERS = [
+    {
+      key: 'status',
+      label: 'Status',
+      options: ['active', 'on_probation', 'on_notice', 'exited'].map((v) => ({
+        value: v, label: label(v).replace(/^\w/, (m) => m.toUpperCase()),
+      })),
+    },
+    {
+      key: 'department_id',
+      label: 'Department',
+      options: departments.map((d) => ({ value: d.id, label: d.name })),
+    },
+    {
+      key: 'employment_type',
+      label: 'Type',
+      options: ['full_time', 'part_time', 'contract', 'intern', 'consultant'].map((v) => ({
+        value: v, label: label(v).replace(/^\w/, (m) => m.toUpperCase()),
+      })),
+    },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Employees"
+        description="Everyone on the team, past and present."
+        actions={
+          <Can permission="hr.employees.create">
+            <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Add employee</Button>
+          </Can>
+        }
+      />
+
+      {stats && (
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <StatTile label="Headcount" value={stats.headcount} icon={Users} tone="brand" />
+          <StatTile label="On probation" value={stats.on_probation} icon={Clock} />
+          <StatTile label="On notice" value={stats.on_notice} icon={LogOut}
+            tone={stats.on_notice > 0 ? 'caution' : 'neutral'} />
+          <StatTile label="Joined this month" value={stats.joined_this_month} icon={UserPlus} tone="positive" />
+        </div>
+      )}
+
+      <ListToolbar
+        search={search}
+        onSearch={(v) => { setSearch(v); setPage(1); }}
+        searchPlaceholder="Search name, code, email or role…"
+        filters={FILTERS}
+        values={filters}
+        onFilter={(key, value) => {
+          setFilters((c) => {
+            const next = { ...c };
+            if (value === undefined) delete next[key]; else next[key] = value;
+            return next;
+          });
+          setPage(1);
+        }}
+        onClear={() => { setFilters({}); setPage(1); }}
+      />
+
+      {error && <Alert tone="critical">{error}</Alert>}
+
+      {loading ? (
+        <TableSkeleton rows={6} columns={6} />
+      ) : employees.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={UserRound}
+            title={search || Object.keys(filters).length ? 'Nobody matches those filters' : 'No employees yet'}
+            description={
+              search || Object.keys(filters).length
+                ? 'Try clearing a filter or searching for something broader.'
+                : 'Add your first employee — leave balances open automatically.'
+            }
+            action={
+              can('hr.employees.create') && (
+                <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Add an employee</Button>
+              )
+            }
+          />
+        </Card>
+      ) : (
+        <>
+          <Table>
+            <THead>
+              <tr>
+                <TH>Employee</TH>
+                <TH>Code</TH>
+                <TH>Department</TH>
+                <TH>Manager</TH>
+                <TH>Status</TH>
+                <TH>Joined</TH>
+              </tr>
+            </THead>
+            <TBody>
+              {employees.map((employee) => (
+                <TR key={employee.id} onClick={() => setSelectedId(employee.id)}>
+                  <TD>
+                    <div className="flex items-center gap-2.5">
+                      <Avatar name={employee.name} size="md" />
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{employee.name}</p>
+                        <p className="truncate text-xs text-[var(--text-tertiary)]">
+                          {employee.designation ?? employee.email ?? '—'}
+                        </p>
+                      </div>
+                    </div>
+                  </TD>
+                  <TD className="tabular text-[var(--text-secondary)]">{employee.employee_code}</TD>
+                  <TD className="text-[var(--text-secondary)]">{employee.department_name ?? '—'}</TD>
+                  <TD className="text-[var(--text-secondary)]">{employee.manager_name ?? '—'}</TD>
+                  <TD>
+                    <Badge size="sm" tone={STATUS_TONE[employee.status]}>{label(employee.status)}</Badge>
+                  </TD>
+                  <TD className="text-[var(--text-secondary)]">{date(employee.joined_on)}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+          <Pagination meta={meta} onPage={setPage} />
+        </>
+      )}
+
+      <EmployeeDrawer
+        employeeId={selectedId}
+        onClose={() => { setSelectedId(null); router.replace('/hr/employees'); }}
+        onChanged={load}
+      />
+
+      <CreateEmployeeModal
+        open={creating}
+        departments={departments}
+        employees={employees}
+        onClose={() => { setCreating(false); router.replace('/hr/employees'); }}
+        onCreated={load}
+      />
+    </div>
+  );
+}
+
+function EmployeeDrawer({ employeeId, onClose, onChanged }) {
+  const toast = useToast();
+  const [employee, setEmployee] = useState(null);
+  const [offboarding, setOffboarding] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!employeeId) { setEmployee(null); return; }
+    api.get(`/hr/employees/${employeeId}`).then((r) => setEmployee(r.data)).catch(() => setEmployee(null));
+  }, [employeeId]);
+
+  async function offboard() {
+    setBusy(true);
+    try {
+      const response = await api.post(`/hr/employees/${employeeId}/offboard`, {});
+      toast.success('Offboarded', {
+        description: response.data.reports_reassigned > 0
+          ? `${response.data.reports_reassigned} direct report(s) reassigned.`
+          : undefined,
+      });
+      setOffboarding(false);
+      onChanged?.();
+      onClose();
+    } catch (error) {
+      toast.error('Could not offboard', {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!employeeId) return null;
+
+  return (
+    <>
+      <Drawer
+        open
+        onClose={onClose}
+        width="lg"
+        title={employee?.name ?? 'Employee'}
+        subtitle={employee?.designation}
+        badge={employee && <Badge size="sm" tone={STATUS_TONE[employee.status]}>{label(employee.status)}</Badge>}
+        footer={
+          employee && employee.status !== 'exited' && (
+            <Can permission="hr.employees.edit">
+              <Button variant="danger-ghost" icon={LogOut} onClick={() => setOffboarding(true)}>
+                Offboard
+              </Button>
+            </Can>
+          )
+        }
+      >
+        {!employee ? (
+          <div className="space-y-3">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-14 w-full" />)}</div>
+        ) : (
+          <div className="space-y-6">
+            <div className="flex items-center gap-4">
+              <Avatar name={employee.name} size="xl" />
+              <div className="flex gap-2">
+                {employee.email && (
+                  <a href={`mailto:${employee.email}`}><Button variant="secondary" size="sm" icon={Mail}>Email</Button></a>
+                )}
+                {employee.phone && (
+                  <a href={`tel:${employee.phone}`}><Button variant="secondary" size="sm" icon={Phone}>Call</Button></a>
+                )}
+              </div>
+            </div>
+
+            <DetailGrid
+              items={[
+                { label: 'Employee code', value: employee.employee_code },
+                { label: 'Work email', value: employee.email },
+                { label: 'Phone', value: employee.phone },
+                { label: 'Department', value: employee.department_name },
+                { label: 'Manager', value: employee.manager_name },
+                { label: 'Employment type', value: label(employee.employment_type) },
+                { label: 'Work location', value: employee.work_location },
+                { label: 'Joined', value: date(employee.joined_on) },
+                { label: 'Date of birth', value: employee.date_of_birth ? date(employee.date_of_birth) : null },
+                { label: 'Exited', value: employee.exited_on ? date(employee.exited_on) : null },
+                { label: 'Exit reason', value: employee.exit_reason },
+                { label: 'Notes', value: employee.notes, full: true },
+              ]}
+            />
+
+            {/* ── leave balances ────────────────────────────────────────── */}
+            <div>
+              <h3 className="mb-2 text-sm font-medium text-[var(--text-secondary)]">
+                Leave balance · {new Date().getFullYear()}
+              </h3>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {employee.leave_balances.map((balance) => {
+                  const total = Number(balance.entitled) + Number(balance.carried);
+                  const pct = total > 0 ? (Number(balance.used) / total) * 100 : 0;
+                  return (
+                    <div key={balance.leave_type_id} className="panel p-3">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-sm">{balance.name}</span>
+                        <span className="shrink-0 text-sm font-semibold tabular">
+                          {balance.available}
+                          <span className="text-xs font-normal text-[var(--text-tertiary)]">
+                            {' '}/ {total || '∞'}
+                          </span>
+                        </span>
+                      </div>
+                      {total > 0 && (
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--surface-sunken)]">
+                          <div
+                            className={cn('h-full rounded-full transition-all duration-500',
+                              pct > 80 ? 'bg-[var(--color-critical-500)]' : 'bg-[var(--color-brand-500)]')}
+                            style={{ width: `${Math.min(pct, 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ── direct reports ────────────────────────────────────────── */}
+            {employee.direct_reports.length > 0 && (
+              <div>
+                <h3 className="mb-2 flex items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)]">
+                  <Network className="size-3.5" />
+                  Direct reports ({employee.direct_reports.length})
+                </h3>
+                <ul className="space-y-2">
+                  {employee.direct_reports.map((report) => (
+                    <li key={report.id} className="panel flex items-center gap-3 px-3 py-2.5">
+                      <Avatar name={`${report.first_name} ${report.last_name ?? ''}`} size="sm" />
+                      <div className="min-w-0">
+                        <p className="truncate text-base font-medium">
+                          {[report.first_name, report.last_name].filter(Boolean).join(' ')}
+                        </p>
+                        <p className="truncate text-xs text-[var(--text-tertiary)]">{report.designation ?? '—'}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* ── recent leave ──────────────────────────────────────────── */}
+            <div>
+              <h3 className="mb-2 text-sm font-medium text-[var(--text-secondary)]">Recent leave</h3>
+              {employee.recent_leave.length === 0 ? (
+                <p className="rounded-[var(--radius-lg)] border border-dashed border-[var(--border-default)] px-3 py-5 text-center text-sm text-[var(--text-tertiary)]">
+                  No leave recorded.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {employee.recent_leave.map((leave) => (
+                    <li key={leave.id} className="panel flex items-center justify-between gap-3 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-base">{leave.leave_type_name}</p>
+                        <p className="text-xs text-[var(--text-tertiary)]">
+                          {date(leave.start_date, 'short')} – {date(leave.end_date, 'short')} · {leave.days} days
+                        </p>
+                      </div>
+                      <Badge size="sm" tone={leave.status === 'approved' ? 'positive' : leave.status === 'pending' ? 'caution' : 'neutral'}>
+                        {leave.status}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+      </Drawer>
+
+      <Modal
+        open={offboarding}
+        onClose={() => setOffboarding(false)}
+        title={`Offboard ${employee?.name}?`}
+        description="This marks them as exited, reassigns their direct reports and cancels any pending leave."
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setOffboarding(false)} disabled={busy}>Cancel</Button>
+            <Button variant="danger" onClick={offboard} loading={busy} data-autofocus>Offboard</Button>
+          </>
+        }
+      >
+        <Alert tone="info">
+          Their record and history are kept — nothing is deleted. You can see them again by
+          filtering on the “Exited” status.
+        </Alert>
+      </Modal>
+    </>
+  );
+}
+
+function CreateEmployeeModal({ open, departments, employees, onClose, onCreated }) {
+  const toast = useToast();
+  const [form, setForm] = useState({ employment_type: 'full_time', status: 'active' });
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState({});
+  const [formError, setFormError] = useState(null);
+
+  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setErrors({});
+    setFormError(null);
+    try {
+      const payload = { ...form };
+      for (const key of Object.keys(payload)) if (payload[key] === '') delete payload[key];
+
+      const response = await api.post('/hr/employees', payload);
+      toast.success(`${response.data.name} added`, {
+        description: `Employee code ${response.data.employee_code}. Leave balances opened.`,
+      });
+      setForm({ employment_type: 'full_time', status: 'active' });
+      onCreated();
+      onClose();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const fields = err.fieldErrors;
+        if (Object.keys(fields).length) setErrors(fields);
+        else setFormError(err.message);
+      } else setFormError('Could not save that employee.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Add employee"
+      description="Only a first name is required. The employee code is generated for you."
+      size="lg"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="primary" onClick={submit} loading={busy} icon={Plus}>Add employee</Button>
+        </>
+      }
+    >
+      <form onSubmit={submit} className="space-y-4">
+        {formError && <Alert tone="critical">{formError}</Alert>}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="First name" required error={errors.first_name}>
+            {(p) => <Input {...p} value={form.first_name ?? ''} onChange={set('first_name')} required data-autofocus />}
+          </Field>
+          <Field label="Last name">
+            {(p) => <Input {...p} value={form.last_name ?? ''} onChange={set('last_name')} />}
+          </Field>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Work email" error={errors.email}>
+            {(p) => <Input {...p} type="email" icon={Mail} value={form.email ?? ''} onChange={set('email')} />}
+          </Field>
+          <Field label="Phone">
+            {(p) => <Input {...p} icon={Phone} value={form.phone ?? ''} onChange={set('phone')} />}
+          </Field>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Designation">
+            {(p) => <Input {...p} placeholder="Senior Engineer" value={form.designation ?? ''} onChange={set('designation')} />}
+          </Field>
+          <Field label="Department" hint={departments.length ? undefined : 'No departments yet.'}>
+            {(p) => (
+              <Select {...p} value={form.department_id ?? ''} onChange={set('department_id')} disabled={!departments.length}>
+                <option value="">Unassigned</option>
+                {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </Select>
+            )}
+          </Field>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Reports to">
+            {(p) => (
+              <Select {...p} value={form.manager_id ?? ''} onChange={set('manager_id')} disabled={!employees.length}>
+                <option value="">No manager</option>
+                {employees.filter((e) => e.status !== 'exited').map((e) => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          <Field label="Employment type">
+            {(p) => (
+              <Select {...p} value={form.employment_type} onChange={set('employment_type')}>
+                {['full_time', 'part_time', 'contract', 'intern', 'consultant'].map((t) => (
+                  <option key={t} value={t}>{label(t)}</option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="Joined on">
+            {(p) => <Input {...p} type="date" value={form.joined_on ?? ''} onChange={set('joined_on')} />}
+          </Field>
+          <Field label="Date of birth">
+            {(p) => <Input {...p} type="date" value={form.date_of_birth ?? ''} onChange={set('date_of_birth')} />}
+          </Field>
+          <Field label="Status">
+            {(p) => (
+              <Select {...p} value={form.status} onChange={set('status')}>
+                <option value="active">Active</option>
+                <option value="on_probation">On probation</option>
+              </Select>
+            )}
+          </Field>
+        </div>
+
+        <Field label="Notes">
+          {(p) => <Textarea {...p} rows={2} value={form.notes ?? ''} onChange={set('notes')} />}
+        </Field>
+      </form>
+    </Modal>
+  );
+}

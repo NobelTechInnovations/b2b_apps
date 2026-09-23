@@ -26,5 +26,7 @@ export const config = defineConfig({
   appUrl: env('string', { default: 'http://localhost:3000' }),
 
   maxFailedAttempts: env('number', { default: 8 }),
+  // Tight in production, loose locally so test runs are repeatable.
+  registerPerHour: env('number', { default: 10 }),
   lockoutMinutes: env('number', { default: 15 }),
 });

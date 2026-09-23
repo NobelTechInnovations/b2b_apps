@@ -9,5 +9,25 @@ export default async function DashboardPage() {
     serverApi('/organizations/current'),
   ]);
 
-  return <DashboardClient workspace={workspace.data} organization={organization.data} />;
+  // Widget data comes from whichever apps the workspace actually has, in
+  // parallel. A slow or missing app degrades its own tiles, not the page.
+  const apps = workspace.data?.apps ?? [];
+  const widgetSources = ['crm', 'hr'].filter((slug) => apps.includes(slug));
+
+  const widgetResults = await Promise.all(
+    widgetSources.map(async (slug) => {
+      const { data } = await serverApi(`/${slug}/widgets`);
+      return data ?? {};
+    }),
+  );
+
+  const widgetData = Object.assign({}, ...widgetResults);
+
+  return (
+    <DashboardClient
+      workspace={workspace.data}
+      organization={organization.data}
+      widgetData={widgetData}
+    />
+  );
 }

@@ -1,0 +1,440 @@
+import { id, paginate } from '@nexus/db-kit';
+import {
+  requirePermission, body, query, params, validate as v, notFound, badRequest, conflict,
+} from '@nexus/service-kit';
+import { EVENTS } from '@nexus/contracts/events';
+import { nextEmployeeCode, ensureLeaveTypes } from '../lib/setup.js';
+
+const SORTS = ['created_at', 'joined_on', 'first_name', 'employee_code'];
+
+export async function employeeRoutes(app) {
+  const { db } = app;
+
+  // ═══════════════════════════════════════════════════════════════════ LIST
+  app.get(
+    '/hr/employees',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.employees.view')],
+      schema: {
+        querystring: query({
+          status: v.enum(['active', 'on_probation', 'on_notice', 'exited', 'on_leave']),
+          department_id: v.id('dep'),
+          employment_type: v.enum(['full_time', 'part_time', 'contract', 'intern', 'consultant']),
+          manager_id: v.id('emp'),
+        }),
+      },
+    },
+    async (request) => {
+      const { orgId } = request.ctx;
+      const page = paginate({ ...request.query, allowedSorts: SORTS });
+      const qs = request.query;
+
+      const where = ['e.org_id = $1', 'e.archived_at IS NULL'];
+      const values = [orgId];
+
+      if (qs.status) { values.push(qs.status); where.push(`e.status = $${values.length}`); }
+      if (qs.department_id) { values.push(qs.department_id); where.push(`e.department_id = $${values.length}`); }
+      if (qs.employment_type) { values.push(qs.employment_type); where.push(`e.employment_type = $${values.length}`); }
+      if (qs.manager_id) { values.push(qs.manager_id); where.push(`e.manager_id = $${values.length}`); }
+      if (qs.q) {
+        values.push(`%${qs.q}%`);
+        where.push(
+          `(e.first_name ILIKE $${values.length} OR e.last_name ILIKE $${values.length}
+            OR e.email ILIKE $${values.length} OR e.employee_code ILIKE $${values.length}
+            OR e.designation ILIKE $${values.length})`,
+        );
+      }
+
+      const clause = where.join(' AND ');
+      const join = `FROM employees e LEFT JOIN departments d ON d.id = e.department_id`;
+
+      const [rows, total, stats] = await Promise.all([
+        db.rows(
+          `SELECT e.*, d.name AS department_name,
+                  m.first_name AS manager_first_name, m.last_name AS manager_last_name
+             ${join} LEFT JOIN employees m ON m.id = e.manager_id
+            WHERE ${clause}
+            ORDER BY e.${page.orderBy} LIMIT ${page.limit} OFFSET ${page.offset}`,
+          values,
+        ),
+        db.one(`SELECT count(*)::int AS n ${join} WHERE ${clause}`, values),
+        db.one(
+          `SELECT
+             count(*) FILTER (WHERE status <> 'exited')::int AS headcount,
+             count(*) FILTER (WHERE status = 'on_probation')::int AS on_probation,
+             count(*) FILTER (WHERE status = 'on_notice')::int AS on_notice,
+             count(*) FILTER (WHERE joined_on >= date_trunc('month', current_date))::int AS joined_this_month
+           FROM employees WHERE org_id = $1 AND archived_at IS NULL`,
+          [orgId],
+        ),
+      ]);
+
+      return { data: rows.map(shape), meta: { ...page.meta(total.n), stats } };
+    },
+  );
+
+  // ═══════════════════════════════════════════════════════════════════ READ
+  app.get(
+    '/hr/employees/:employeeId',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.employees.view')],
+      schema: { params: params({ employeeId: v.id('emp') }) },
+    },
+    async (request) => {
+      const { orgId } = request.ctx;
+
+      const employee = await db.one(
+        `SELECT e.*, d.name AS department_name,
+                m.first_name AS manager_first_name, m.last_name AS manager_last_name
+           FROM employees e
+           LEFT JOIN departments d ON d.id = e.department_id
+           LEFT JOIN employees m ON m.id = e.manager_id
+          WHERE e.id = $1 AND e.org_id = $2 AND e.archived_at IS NULL`,
+        [request.params.employeeId, orgId],
+      );
+      if (!employee) throw notFound('Employee');
+
+      const year = new Date().getFullYear();
+
+      const [reports, balances, recentLeave, attendance] = await Promise.all([
+        db.rows(
+          `SELECT id, first_name, last_name, designation FROM employees
+            WHERE org_id = $1 AND manager_id = $2 AND archived_at IS NULL ORDER BY first_name`,
+          [orgId, employee.id],
+        ),
+        db.rows(
+          `SELECT lt.id AS leave_type_id, lt.name, lt.code, lt.colour, lt.is_paid,
+                  COALESCE(lb.entitled, lt.days_per_year) AS entitled,
+                  COALESCE(lb.carried, 0) AS carried,
+                  COALESCE(lb.used, 0) AS used
+             FROM leave_types lt
+             LEFT JOIN leave_balances lb
+               ON lb.leave_type_id = lt.id AND lb.employee_id = $2 AND lb.year = $3
+            WHERE lt.org_id = $1 AND lt.archived_at IS NULL
+            ORDER BY lt.position`,
+          [orgId, employee.id, year],
+        ),
+        db.rows(
+          `SELECT lr.*, lt.name AS leave_type_name, lt.colour FROM leave_requests lr
+             JOIN leave_types lt ON lt.id = lr.leave_type_id
+            WHERE lr.org_id = $1 AND lr.employee_id = $2
+            ORDER BY lr.start_date DESC LIMIT 10`,
+          [orgId, employee.id],
+        ),
+        db.rows(
+          `SELECT * FROM attendance
+            WHERE org_id = $1 AND employee_id = $2 AND on_date >= current_date - 13
+            ORDER BY on_date DESC`,
+          [orgId, employee.id],
+        ),
+      ]);
+
+      return {
+        data: {
+          ...shape(employee),
+          direct_reports: reports,
+          leave_balances: balances.map((b) => ({
+            ...b,
+            available: Number(b.entitled) + Number(b.carried) - Number(b.used),
+          })),
+          recent_leave: recentLeave,
+          recent_attendance: attendance,
+        },
+      };
+    },
+  );
+
+  // ═════════════════════════════════════════════════════════════════ CREATE
+  app.post(
+    '/hr/employees',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.employees.create')],
+      schema: {
+        body: body(
+          {
+            first_name: v.text(80, 1),
+            last_name: v.text(80),
+            employee_code: v.text(32),
+            email: v.email,
+            personal_email: v.email,
+            phone: v.text(32),
+            date_of_birth: v.date,
+            gender: v.enum(['female', 'male', 'other', 'undisclosed']),
+            department_id: v.id('dep'),
+            designation: v.text(120),
+            manager_id: v.id('emp'),
+            employment_type: v.enum(['full_time', 'part_time', 'contract', 'intern', 'consultant']),
+            status: v.enum(['active', 'on_probation']),
+            work_location: v.text(120),
+            joined_on: v.date,
+            probation_ends_on: v.date,
+            address: { type: 'object', additionalProperties: true },
+            emergency_contact: { type: 'object', additionalProperties: true },
+            notes: v.longText,
+          },
+          ['first_name'],
+        ),
+      },
+    },
+    async (request, reply) => {
+      const { orgId, userId } = request.ctx;
+      const b = request.body;
+
+      // The first hire may precede anyone opening the Leave screen.
+      await ensureLeaveTypes(db, orgId);
+
+      if (b.email) {
+        const clash = await db.one(
+          `SELECT id, first_name, last_name FROM employees
+            WHERE org_id = $1 AND lower(email) = lower($2) AND archived_at IS NULL`,
+          [orgId, b.email],
+        );
+        if (clash) {
+          throw conflict(
+            `${[clash.first_name, clash.last_name].filter(Boolean).join(' ')} already uses that work email.`,
+            { employee_id: clash.id },
+          );
+        }
+      }
+
+      const employee = await db.transaction(async (tx) => {
+        const code = b.employee_code?.trim() || (await nextEmployeeCode(tx, orgId));
+
+        const created = await tx.one(
+          `INSERT INTO employees
+             (id, org_id, employee_code, first_name, last_name, email, personal_email, phone,
+              date_of_birth, gender, department_id, designation, manager_id, employment_type,
+              status, work_location, joined_on, probation_ends_on, address, emergency_contact,
+              notes, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+                   COALESCE($14,'full_time'), COALESCE($15,'active'), $16,
+                   COALESCE($17::date, current_date), $18, $19, $20, $21, $22)
+           RETURNING *`,
+          [
+            id('emp'), orgId, code, b.first_name.trim(), b.last_name ?? null,
+            b.email ?? null, b.personal_email ?? null, b.phone ?? null,
+            b.date_of_birth ?? null, b.gender ?? null, b.department_id ?? null,
+            b.designation ?? null, b.manager_id ?? null, b.employment_type ?? null,
+            b.status ?? null, b.work_location ?? null, b.joined_on ?? null,
+            b.probation_ends_on ?? null, JSON.stringify(b.address ?? {}),
+            JSON.stringify(b.emergency_contact ?? {}), b.notes ?? null, userId,
+          ],
+        );
+
+        // Open this year's leave balances from the workspace's policy, so the
+        // entitlement is a real row rather than something computed on the fly
+        // and impossible to adjust for one person.
+        const year = new Date().getFullYear();
+        await tx.query(
+          `INSERT INTO leave_balances (org_id, employee_id, leave_type_id, year, entitled)
+           SELECT $1, $2, lt.id, $3, lt.days_per_year
+             FROM leave_types lt WHERE lt.org_id = $1 AND lt.archived_at IS NULL
+           ON CONFLICT DO NOTHING`,
+          [orgId, created.id, year],
+        );
+
+        tx.emit({
+          type: EVENTS.EMPLOYEE_CREATED,
+          org_id: orgId,
+          actor_id: userId,
+          data: {
+            employee_id: created.id,
+            employee_code: created.employee_code,
+            name: [created.first_name, created.last_name].filter(Boolean).join(' '),
+            email: created.email,
+            department_id: created.department_id,
+            joined_on: created.joined_on,
+          },
+        });
+
+        return created;
+      });
+
+      return reply.status(201).send({ data: shape(employee) });
+    },
+  );
+
+  // ═════════════════════════════════════════════════════════════════ UPDATE
+  app.patch(
+    '/hr/employees/:employeeId',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.employees.edit')],
+      schema: {
+        params: params({ employeeId: v.id('emp') }),
+        body: body({
+          first_name: v.text(80, 1), last_name: v.text(80), email: v.email,
+          personal_email: v.email, phone: v.text(32), date_of_birth: v.date,
+          gender: v.enum(['female', 'male', 'other', 'undisclosed']),
+          department_id: v.id('dep'), designation: v.text(120), manager_id: v.id('emp'),
+          employment_type: v.enum(['full_time', 'part_time', 'contract', 'intern', 'consultant']),
+          status: v.enum(['active', 'on_probation', 'on_notice', 'on_leave']),
+          work_location: v.text(120), joined_on: v.date, probation_ends_on: v.date,
+          address: { type: 'object', additionalProperties: true },
+          emergency_contact: { type: 'object', additionalProperties: true },
+          notes: v.longText,
+        }),
+      },
+    },
+    async (request) => {
+      const { orgId, userId } = request.ctx;
+
+      // Nobody may be their own manager, and a chain must not loop back.
+      if (request.body.manager_id) {
+        if (request.body.manager_id === request.params.employeeId) {
+          throw badRequest('Someone cannot report to themselves.');
+        }
+        const loops = await managerLoops(db, orgId, request.params.employeeId, request.body.manager_id);
+        if (loops) throw badRequest('That would create a circular reporting line.');
+      }
+
+      const fields = [
+        'first_name', 'last_name', 'email', 'personal_email', 'phone', 'date_of_birth',
+        'gender', 'department_id', 'designation', 'manager_id', 'employment_type',
+        'status', 'work_location', 'joined_on', 'probation_ends_on', 'address',
+        'emergency_contact', 'notes',
+      ].filter((f) => request.body[f] !== undefined);
+
+      if (!fields.length) throw badRequest('Nothing to update.');
+
+      const sets = fields.map((f, i) => `${f} = $${i + 3}`).join(', ');
+      const values = fields.map((f) =>
+        ['address', 'emergency_contact'].includes(f) ? JSON.stringify(request.body[f]) : request.body[f],
+      );
+
+      const updated = await db.one(
+        `UPDATE employees SET ${sets} WHERE id = $1 AND org_id = $2 AND archived_at IS NULL RETURNING *`,
+        [request.params.employeeId, orgId, ...values],
+      );
+      if (!updated) throw notFound('Employee');
+
+      await db.query(
+        `INSERT INTO outbox (id, type, org_id, actor_id, data) VALUES ($1,$2,$3,$4,$5)`,
+        [id('evt'), EVENTS.EMPLOYEE_UPDATED, orgId, userId,
+         JSON.stringify({ employee_id: updated.id, changed: fields })],
+      );
+
+      return { data: shape(updated) };
+    },
+  );
+
+  // ═══════════════════════════════════════════════════════════════ OFFBOARD
+  app.post(
+    '/hr/employees/:employeeId/offboard',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.employees.edit')],
+      schema: {
+        params: params({ employeeId: v.id('emp') }),
+        body: body({ exited_on: v.date, exit_reason: v.text(240), reassign_reports_to: v.id('emp') }),
+      },
+    },
+    async (request) => {
+      const { orgId, userId } = request.ctx;
+      const b = request.body ?? {};
+
+      const employee = await db.one(
+        `SELECT * FROM employees WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`,
+        [request.params.employeeId, orgId],
+      );
+      if (!employee) throw notFound('Employee');
+      if (employee.status === 'exited') throw badRequest('This person has already been offboarded.');
+
+      const result = await db.transaction(async (tx) => {
+        // Never leave a team without a manager.
+        const reports = await tx.rows(
+          `SELECT id FROM employees WHERE org_id = $1 AND manager_id = $2 AND archived_at IS NULL`,
+          [orgId, employee.id],
+        );
+
+        if (reports.length) {
+          await tx.query(
+            `UPDATE employees SET manager_id = $3 WHERE org_id = $1 AND manager_id = $2`,
+            [orgId, employee.id, b.reassign_reports_to ?? employee.manager_id ?? null],
+          );
+        }
+
+        // Pending leave for someone who has left is meaningless.
+        const cancelled = await tx.rows(
+          `UPDATE leave_requests SET status = 'cancelled',
+                  decision_note = 'Employee offboarded', decided_at = now()
+            WHERE org_id = $1 AND employee_id = $2 AND status = 'pending'
+          RETURNING id`,
+          [orgId, employee.id],
+        );
+
+        const row = await tx.one(
+          `UPDATE employees
+              SET status = 'exited',
+                  exited_on = COALESCE($3::date, current_date),
+                  exit_reason = $4
+            WHERE id = $1 AND org_id = $2 RETURNING *`,
+          [employee.id, orgId, b.exited_on ?? null, b.exit_reason ?? null],
+        );
+
+        tx.emit({
+          type: EVENTS.EMPLOYEE_OFFBOARDED,
+          org_id: orgId,
+          actor_id: userId,
+          data: {
+            employee_id: row.id,
+            name: [row.first_name, row.last_name].filter(Boolean).join(' '),
+            exited_on: row.exited_on,
+            reason: row.exit_reason,
+            reports_reassigned: reports.length,
+          },
+        });
+
+        return { employee: row, reports: reports.length, cancelled: cancelled.length };
+      });
+
+      return {
+        data: {
+          offboarded: true,
+          exited_on: result.employee.exited_on,
+          reports_reassigned: result.reports,
+          leave_requests_cancelled: result.cancelled,
+        },
+      };
+    },
+  );
+
+  app.delete(
+    '/hr/employees/:employeeId',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.employees.delete')],
+      schema: { params: params({ employeeId: v.id('emp') }) },
+    },
+    async (request) => {
+      const row = await db.one(
+        `UPDATE employees SET archived_at = now()
+          WHERE id = $1 AND org_id = $2 AND archived_at IS NULL RETURNING id`,
+        [request.params.employeeId, request.ctx.orgId],
+      );
+      if (!row) throw notFound('Employee');
+      return { data: { archived: true } };
+    },
+  );
+}
+
+/** Walks up the reporting chain looking for `employeeId`. */
+async function managerLoops(db, orgId, employeeId, proposedManagerId, depth = 0) {
+  if (depth > 20) return true;
+  if (proposedManagerId === employeeId) return true;
+
+  const manager = await db.one(
+    `SELECT manager_id FROM employees WHERE id = $1 AND org_id = $2`,
+    [proposedManagerId, orgId],
+  );
+  if (!manager?.manager_id) return false;
+
+  return managerLoops(db, orgId, employeeId, manager.manager_id, depth + 1);
+}
+
+function shape(employee) {
+  return {
+    ...employee,
+    name: [employee.first_name, employee.last_name].filter(Boolean).join(' '),
+    manager_name: employee.manager_first_name
+      ? [employee.manager_first_name, employee.manager_last_name].filter(Boolean).join(' ')
+      : null,
+  };
+}

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import rateLimit from '@fastify/rate-limit';
-import { createService, startService } from '@nexus/service-kit';
+import { ApiError, createService, startService } from '@nexus/service-kit';
 import { createDb, runMigrations } from '@nexus/db-kit';
 import { createBus, startOutboxRelay } from '@nexus/bus';
 import { config } from './config.js';
@@ -32,13 +32,15 @@ await app.register(rateLimit, {
   max: 300,
   timeWindow: '1 minute',
   keyGenerator: (request) => request.ip,
-  errorResponseBuilder: (request, context) => ({
-    error: {
-      code: 'rate_limited',
-      message: `Too many attempts. Try again in ${Math.ceil(context.ttl / 1000)}s.`,
-      request_id: request.id,
-    },
-  }),
+  // Must be an Error carrying a status: the plugin hands this to the shared
+  // error handler, and a plain object would be reported as an internal error.
+  errorResponseBuilder: (request, context) =>
+    new ApiError(
+      429,
+      'rate_limited',
+      `Too many attempts. Try again in ${Math.ceil(context.ttl / 1000)}s.`,
+      { retry_after_seconds: Math.ceil(context.ttl / 1000) },
+    ),
 });
 
 app.decorate('keys', await loadKeys(db, app.log));

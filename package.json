@@ -15,10 +15,18 @@
     "dev": "node scripts/dev.js",
     "lint": "eslint .",
     "test": "node --test services/*/test/**/*.test.js",
-    "smoke": "node scripts/smoke.js"
+    "smoke": "node scripts/smoke.js",
+    "smoke:crm": "node scripts/smoke-crm.js",
+    "smoke:hr": "node scripts/smoke-hr.js",
+    "smoke:docs": "node scripts/smoke-documents.js",
+    "smoke:all": "node scripts/smoke.js && node scripts/smoke-crm.js && node scripts/smoke-hr.js && node scripts/smoke-documents.js && node scripts/smoke-invoicing.js && node scripts/smoke-payroll.js && node scripts/smoke-portal.js",
+    "smoke:invoicing": "node scripts/smoke-invoicing.js",
+    "smoke:payroll": "node scripts/smoke-payroll.js",
+    "smoke:portal": "node scripts/smoke-portal.js"
   },
   "devDependencies": {
-    "eslint": "^9.17.0"
+    "eslint": "^9.17.0",
+    "exceljs": "^4.4.0"
   },
   "packageManager": "pnpm@11.20.0"
 }

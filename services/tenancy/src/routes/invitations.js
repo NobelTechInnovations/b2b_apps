@@ -140,8 +140,16 @@ export async function invitationRoutes(app) {
   );
 
   /** Public preview of an invitation, so the join page can show who invited you. */
+  /**
+   * What an invitation is for, before you have signed in.
+   *
+   * Reachable without a session — an invited person has no account yet, so
+   * requiring one to read their own invitation would be a closed loop. It
+   * returns only what the email already told them: the workspace, the role,
+   * and the address it was sent to.
+   */
   app.get(
-    '/invitations/preview/:token',
+    '/invite/:token',
     { schema: { params: { type: 'object', properties: { token: { type: 'string', maxLength: 200 } }, required: ['token'] } } },
     async (request) => {
       const invitation = await db.one(

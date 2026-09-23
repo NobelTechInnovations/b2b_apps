@@ -527,8 +527,7 @@ export const APPS = [
     nav: [
       { label: 'Overview', path: '/invoicing', icon: 'LayoutDashboard', permission: 'invoicing.invoices.view' },
       { label: 'Invoices', path: '/invoicing/invoices', icon: 'FileText', permission: 'invoicing.invoices.view' },
-      { label: 'Payments', path: '/invoicing/payments', icon: 'CreditCard', permission: 'invoicing.payments.view' },
-      { label: 'Reminders', path: '/invoicing/reminders', icon: 'BellRing', permission: 'invoicing.invoices.edit' },
+      { label: 'Design', path: '/invoicing/templates', icon: 'Palette', permission: 'invoicing.invoices.view' },
     ],
     widgets: [
       { id: 'invoicing.outstanding', title: 'Outstanding', size: 'sm', permission: 'invoicing.invoices.view' },
@@ -752,15 +751,21 @@ export const APPS = [
     service: 'hr',
     price: price(599),
     flagship: true,
-    highlights: ['Attendance & leave', 'Performance reviews', 'Document vault', 'Onboarding flows'],
-    features: ['hr.employees', 'hr.departments', 'hr.attendance', 'hr.leave', 'hr.documents', 'hr.performance', 'hr.assets', 'hr.onboarding'],
+    highlights: ['Shifts & overtime', 'Biometric punch sync', 'Employee self-service', 'Offer letters & reviews'],
+    features: ['hr.employees', 'hr.departments', 'hr.attendance', 'hr.shifts', 'hr.devices', 'hr.leave', 'hr.documents', 'hr.performance', 'hr.assets', 'hr.onboarding'],
     permissions: [
       'hr.employees.view', 'hr.employees.create', 'hr.employees.edit', 'hr.employees.delete', 'hr.employees.export',
       'hr.departments.view', 'hr.departments.manage',
       'hr.attendance.view', 'hr.attendance.edit', 'hr.attendance.approve',
+      'hr.shifts.view', 'hr.shifts.manage',
+      'hr.devices.view', 'hr.devices.manage',
       'hr.leave.view', 'hr.leave.create', 'hr.leave.approve',
       'hr.documents.view', 'hr.documents.manage',
-      'hr.performance.view', 'hr.performance.manage',
+      'hr.performance.view', 'hr.performance.manage', 'hr.performance.review',
+      // The employee portal. Every one of these resolves the person from the
+      // signed-in user, never from an id in the request.
+      'hr.self.view', 'hr.self.attendance', 'hr.self.leave', 'hr.self.documents',
+      'hr.self.performance',
       'hr.assets.view', 'hr.assets.manage',
     ],
     nav: [
@@ -768,9 +773,11 @@ export const APPS = [
       { label: 'Employees', path: '/hr/employees', icon: 'UserRound', permission: 'hr.employees.view' },
       { label: 'Departments', path: '/hr/departments', icon: 'Network', permission: 'hr.departments.view' },
       { label: 'Attendance', path: '/hr/attendance', icon: 'Clock', permission: 'hr.attendance.view' },
+      { label: 'Shifts', path: '/hr/shifts', icon: 'CalendarClock', permission: 'hr.shifts.view' },
+      { label: 'Devices', path: '/hr/devices', icon: 'Fingerprint', permission: 'hr.devices.view' },
       { label: 'Leave', path: '/hr/leave', icon: 'CalendarOff', permission: 'hr.leave.view' },
-      { label: 'Performance', path: '/hr/performance', icon: 'Trophy', permission: 'hr.performance.view' },
-      { label: 'Assets', path: '/hr/assets', icon: 'Laptop', permission: 'hr.assets.view' },
+      { label: 'Performance', path: '/hr/performance', icon: 'Target', permission: 'hr.performance.view' },
+      { label: 'Documents', path: '/hr/documents', icon: 'FileSignature', permission: 'hr.documents.view' },
     ],
     widgets: [
       { id: 'hr.headcount', title: 'Headcount', size: 'sm', permission: 'hr.employees.view' },
@@ -798,6 +805,8 @@ export const APPS = [
       'payroll.runs.view', 'payroll.runs.create', 'payroll.runs.approve',
       'payroll.structures.view', 'payroll.structures.manage',
       'payroll.payslips.view', 'payroll.reports.view',
+      // Their own payslips, and only once the run is approved.
+      'payroll.self.payslips',
     ],
     nav: [
       { label: 'Payroll runs', path: '/payroll', icon: 'BadgeIndianRupee', permission: 'payroll.runs.view' },
@@ -937,8 +946,6 @@ export const APPS = [
     ],
     nav: [
       { label: 'All files', path: '/documents', icon: 'FolderOpen', permission: 'documents.files.view' },
-      { label: 'Shared with me', path: '/documents/shared', icon: 'Share2', permission: 'documents.files.view' },
-      { label: 'Approvals', path: '/documents/approvals', icon: 'CheckCheck', permission: 'documents.files.share' },
     ],
     widgets: [{ id: 'documents.recent', title: 'Recent files', size: 'md', permission: 'documents.files.view' }],
     dependencies: [],

@@ -63,9 +63,16 @@ export default function LeadsClient() {
   const [filters, setFilters] = useState({});
   const [page, setPage] = useState(1);
 
-  const [creating, setCreating] = useState(params.get('new') === '1');
+  const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState(null);
   const [converting, setConverting] = useState(null);
+
+  // Under Suspense the search params are not populated when the useState
+  // initialiser runs, so deep links like /crm/leads?new=1 have to be applied
+  // in an effect or they silently do nothing.
+  useEffect(() => {
+    if (params.get('new') === '1') setCreating(true);
+  }, [params]);
 
   const load = useCallback(async () => {
     setLoading(true);

@@ -41,8 +41,16 @@ export default function DealsClient() {
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({});
   const [page, setPage] = useState(1);
-  const [creating, setCreating] = useState(params.get('new') === '1');
-  const [selectedId, setSelectedId] = useState(params.get('open'));
+  const [creating, setCreating] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+
+  // Search params are not available to the useState initialiser under
+  // Suspense, so deep links are applied here instead.
+  useEffect(() => {
+    if (params.get('new') === '1') setCreating(true);
+    const open = params.get('open');
+    if (open) setSelectedId(open);
+  }, [params]);
 
   const load = useCallback(async () => {
     setLoading(true);

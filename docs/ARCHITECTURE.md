@@ -289,9 +289,76 @@ composes app modules discovered at runtime.
 | customer, contact | crm (system of record) | subscribe to `crm.customer.*` |
 | product, stock | erp | subscribe to `erp.product.*` |
 | employee | hr | subscribe to `hr.employee.*` |
+| shift, attendance, punch | hr | read the period summary over HTTP |
+| salary, payslip, payroll run | payroll | subscribe to `payroll.run.*` |
+| invoice, payment | invoicing | subscribe to `billing.invoice.*` |
 | file blob + metadata | files | hold `file_id` references only |
 
 Exactly one writer per concept. Everyone else holds a projection.
+
+**The HR / payroll seam is the worked example.** HR owns time, payroll owns
+money, and they share nothing but two HTTP reads:
+
+```
+payroll ──GET /internal/employees?active_on=…──────────▶ hr
+payroll ──GET /internal/attendance/summary?from=…&to=…─▶ hr
+```
+
+Both are called once, at the moment a run is processed, with the internal
+service token. What comes back is **snapshotted onto the payslip** — name,
+code, designation, department, days worked — rather than referenced. That is
+the whole point: a payslip must still read correctly in three years when the
+person has left, their department has been renamed and their shift retimed.
+Payroll never opens HR's database, and HR never learns what a day is worth in
+rupees.
+
+A read model would be the wrong tool here. Attendance is amended right up to
+the moment payroll runs, so a projection kept current by events would be a
+cache that is stale exactly when it matters. Reading once, synchronously, at
+the point of use — and then freezing the answer — is both simpler and more
+correct.
+
+### Self-service, and the `self` namespace
+
+One role on the platform grants `*.self.*` and nothing else: `employee`. The
+permission is not what makes it safe. What makes it safe is that **every route
+it can reach resolves the person from the signed-in user, and none of them
+accepts an employee id.**
+
+```
+GET /api/hr/me/attendance        ← resolved from request.ctx.userId
+GET /api/payroll/me/payslips/:id ← id is the PAYSLIP's, and the query
+                                    also filters on the resolved employee
+```
+
+There is no parameter to tamper with, so there is no confused-deputy problem
+to reason about. A colleague's payslip id pasted into a portal session does
+not match the `WHERE` clause and comes back 404 — not because we checked, but
+because the query never had another shape.
+
+Two consequences worth stating:
+
+- **A `self` route is never the same route with a weaker guard.** The portal's
+  "apply for leave" is a separate endpoint from HR's, precisely so the employee
+  id comes from the session rather than the body. The *rules* are shared
+  (`hr/lib/leave.js`), the *identity resolution* is not.
+- **Payroll does not hold the user→employee mapping.** It asks HR, which owns
+  the employee record. One writer per concept applies to the mapping too.
+
+### Machine callers
+
+One route on the gateway carries no user token, because its caller is not a
+user: `POST /api/device-sync/punches`, where attendance terminals post. It
+passes two independent gates rather than one —
+
+1. the gateway's internal service token, proving the request came through us;
+2. a per-device key, whose SHA-256 digest is all that is stored, resolving
+   which workspace the punch belongs to.
+
+A device key only ever unlocks the workspace it was minted in, so a leaked
+terminal key is bounded by that workspace and by rotation. The plaintext key
+is displayed exactly once, at creation; there is no recovery path, only
+rotation, which is the honest consequence of storing only a digest.
 
 ---
 
@@ -315,7 +382,7 @@ Exactly one writer per concept. Everyone else holds a projection.
 
 No assistant in the MVP. But every service exposes a machine-readable
 capability descriptor (resources, filters, actions, required permissions), so
-the Phase-18 assistant plans over declared capabilities and executes through
+the Phase-22 assistant plans over declared capabilities and executes through
 the same gated APIs a human uses — inheriting tenant isolation, entitlements
 and permissions for free. No privileged AI backdoor.
 

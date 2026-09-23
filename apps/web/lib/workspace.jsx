@@ -55,6 +55,8 @@ export function WorkspaceProvider({ initial, children }) {
     navigation: workspace?.navigation ?? [],
     widgets: workspace?.widgets ?? [],
     subscription: workspace?.subscription ?? null,
+    // True when this member can ONLY use the employee portal.
+    portalOnly: workspace?.portal_only ?? false,
   };
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

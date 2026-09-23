@@ -47,7 +47,7 @@ export function Topbar({ organizations = [], onOpenSearch }) {
         align="start"
         width={264}
         trigger={
-          <button className="flex h-8 max-w-[220px] items-center gap-2 rounded-[var(--radius-md)] px-2 transition-colors hover:bg-[var(--surface-hover)]">
+          <button data-tour="workspace-switcher" className="flex h-8 max-w-[220px] items-center gap-2 rounded-[var(--radius-md)] px-2 transition-colors hover:bg-[var(--surface-hover)]">
             <Avatar name={current?.name ?? 'Workspace'} src={current?.logo_url} size="sm" square />
             <span className="min-w-0 flex-1 truncate text-base font-medium">
               {current?.name ?? 'Workspace'}
@@ -76,6 +76,7 @@ export function Topbar({ organizations = [], onOpenSearch }) {
 
       {/* ── search ─────────────────────────────────────────────────────────── */}
       <button
+        data-tour="search"
         onClick={onOpenSearch}
         className={cn(
           'ml-1 flex h-8 flex-1 max-w-md items-center gap-2 rounded-[var(--radius-md)] px-2.5',

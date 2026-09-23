@@ -53,6 +53,13 @@ export const EVENTS = {
   LEAVE_REQUESTED: 'hr.leave.requested',
   LEAVE_APPROVED: 'hr.leave.approved',
 
+  // ── payroll ─────────────────────────────────────────────────────────────
+  PAYROLL_PROCESSED: 'payroll.run.processed',
+  PAYROLL_APPROVED: 'payroll.run.approved',
+  PAYROLL_PAID: 'payroll.run.paid',
+  PAYROLL_CANCELLED: 'payroll.run.cancelled',
+  SALARY_REVISED: 'payroll.salary.revised',
+
   // ── tasks ───────────────────────────────────────────────────────────────
   TASK_CREATED: 'tasks.task.created',
   TASK_ASSIGNED: 'tasks.task.assigned',

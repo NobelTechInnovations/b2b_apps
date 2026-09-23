@@ -33,7 +33,17 @@ export async function createService({
     bodyLimit: 5 * 1024 * 1024,
     genReqId: (req) => req.headers['x-request-id'] ?? randomUUID(),
     ajv: {
-      customOptions: { coerceTypes: 'array', removeAdditional: 'all', useDefaults: true },
+      customOptions: {
+        coerceTypes: 'array',
+        // `true`, not `'all'`. With `'all'` ajv strips every additional
+        // property even where the schema says `additionalProperties: true`,
+        // which silently empties free-form objects — an import mapping, an
+        // address, a settings blob. `true` still strips unknown fields
+        // wherever `additionalProperties: false`, which is what body() and
+        // query() declare, so nothing is loosened at the request boundary.
+        removeAdditional: true,
+        useDefaults: true,
+      },
       plugins: [addFormats],
     },
   });

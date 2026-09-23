@@ -34,6 +34,10 @@ export default async function AppLayout({ children }) {
 
   if (workspace.data?.needs_onboarding) redirect('/onboarding');
 
+  // A portal member has no apps to navigate, so the workspace shell would be
+  // an empty frame around nothing. Send them to their own screen instead.
+  if (workspace.data?.portal_only) redirect('/portal');
+
   return (
     <AppShell workspace={workspace.data} organizations={me.data?.organizations ?? []}>
       {children}

@@ -1,0 +1,473 @@
+import { id, paginate } from '@nexus/db-kit';
+import {
+  requirePermission, requireInternal, body, query, params, validate as v, notFound, badRequest,
+} from '@nexus/service-kit';
+import { deriveDay, formatMinutes } from '../lib/time.js';
+import { shiftForEmployee, ensureDefaultShift, periodSummary } from '../lib/shifts.js';
+import { toISODate } from '../lib/setup.js';
+
+export async function attendanceRoutes(app) {
+  const { db } = app;
+
+  // ══════════════════════════════════════════════════════════ TODAY'S BOARD
+  /** Who is in, who is out, who is on leave — the screen people actually open. */
+  app.get(
+    '/hr/attendance/today',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.attendance.view')],
+      schema: { querystring: query({ on_date: v.date, department_id: v.id('dep') }) },
+    },
+    async (request) => {
+      const { orgId } = request.ctx;
+      const onDate = request.query.on_date ?? null;
+
+      const values = [orgId, onDate];
+      let filter = '';
+      if (request.query.department_id) {
+        values.push(request.query.department_id);
+        filter = `AND e.department_id = $${values.length}`;
+      }
+
+      const rows = await db.rows(
+        `SELECT e.id AS employee_id, e.first_name, e.last_name, e.employee_code,
+                e.designation, d.name AS department_name,
+                a.id AS attendance_id, a.status, a.check_in_at, a.check_out_at,
+                a.work_minutes, a.notes, a.overtime_minutes, a.shortfall_minutes,
+                a.late_minutes, a.early_exit_minutes, a.expected_minutes, a.source,
+                s.name AS shift_name, s.starts_at, s.ends_at
+           FROM employees e
+           LEFT JOIN departments d ON d.id = e.department_id
+           LEFT JOIN attendance a
+             ON a.employee_id = e.id AND a.on_date = COALESCE($2::date, current_date)
+           LEFT JOIN shifts s ON s.id = a.shift_id
+          WHERE e.org_id = $1 AND e.archived_at IS NULL AND e.status <> 'exited' ${filter}
+          ORDER BY e.first_name, e.last_name`,
+        values,
+      );
+
+      const counts = rows.reduce(
+        (acc, row) => {
+          const status = row.status ?? 'not_marked';
+          acc[status] = (acc[status] ?? 0) + 1;
+          return acc;
+        },
+        { present: 0, absent: 0, on_leave: 0, remote: 0, half_day: 0, not_marked: 0 },
+      );
+
+      const overtime = rows.reduce((sum, r) => sum + (r.overtime_minutes ?? 0), 0);
+      const late = rows.filter((r) => (r.late_minutes ?? 0) > 0).length;
+
+      return {
+        data: rows.map((r) => ({
+          ...r,
+          name: [r.first_name, r.last_name].filter(Boolean).join(' '),
+          status: r.status ?? 'not_marked',
+          shift_window: r.starts_at
+            ? `${String(r.starts_at).slice(0, 5)}–${String(r.ends_at).slice(0, 5)}`
+            : null,
+          worked: formatMinutes(r.work_minutes),
+          overtime: r.overtime_minutes ? formatMinutes(r.overtime_minutes) : null,
+        })),
+        meta: {
+          date: onDate ?? toISODate(new Date()),
+          counts,
+          total: rows.length,
+          overtime_minutes: overtime,
+          overtime_hours: formatMinutes(overtime),
+          late_arrivals: late,
+        },
+      };
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════════ MARK
+  app.post(
+    '/hr/attendance',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.attendance.edit')],
+      schema: {
+        body: body(
+          {
+            employee_id: v.id('emp'),
+            on_date: v.date,
+            status: v.enum(['present', 'absent', 'half_day', 'remote', 'holiday', 'weekend']),
+            check_in_at: v.datetime,
+            check_out_at: v.datetime,
+            notes: v.text(240),
+          },
+          ['employee_id', 'status'],
+        ),
+      },
+    },
+    async (request) => {
+      const { orgId, userId } = request.ctx;
+      const b = request.body;
+
+      const employee = await db.one(
+        `SELECT id, status FROM employees WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`,
+        [b.employee_id, orgId],
+      );
+      if (!employee) throw notFound('Employee');
+
+      // Approved leave owns that day; marking over it would silently
+      // contradict the leave record.
+      const onLeave = await db.one(
+        `SELECT 1 AS yes FROM leave_requests
+          WHERE org_id = $1 AND employee_id = $2 AND status = 'approved'
+            AND COALESCE($3::date, current_date) BETWEEN start_date AND end_date`,
+        [orgId, b.employee_id, b.on_date ?? null],
+      );
+      if (onLeave) {
+        throw badRequest('This person has approved leave on that date. Cancel the leave first.');
+      }
+
+      const onDate = b.on_date ?? toISODate(new Date());
+      await ensureDefaultShift(db, orgId);
+      const shift = await shiftForEmployee(db, orgId, b.employee_id, onDate);
+
+      // The status a human picked is respected; the arithmetic around it is
+      // not left to them, so overtime means the same thing however a day
+      // was recorded.
+      const derived = deriveDay({
+        shift,
+        onDate,
+        checkIn: b.check_in_at ?? null,
+        checkOut: b.check_out_at ?? null,
+        workMinutes: null,
+        status: b.status,
+      });
+
+      const row = await db.one(
+        `INSERT INTO attendance
+           (id, org_id, employee_id, on_date, status, check_in_at, check_out_at, work_minutes,
+            notes, recorded_by, shift_id, expected_minutes, overtime_minutes, shortfall_minutes,
+            late_minutes, early_exit_minutes, source)
+         VALUES ($1,$2,$3,$4::date,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'manual')
+         ON CONFLICT (org_id, employee_id, on_date) DO UPDATE SET
+           status = EXCLUDED.status,
+           check_in_at = COALESCE(EXCLUDED.check_in_at, attendance.check_in_at),
+           check_out_at = COALESCE(EXCLUDED.check_out_at, attendance.check_out_at),
+           work_minutes = COALESCE(EXCLUDED.work_minutes, attendance.work_minutes),
+           notes = COALESCE(EXCLUDED.notes, attendance.notes),
+           shift_id = EXCLUDED.shift_id,
+           expected_minutes = EXCLUDED.expected_minutes,
+           overtime_minutes = EXCLUDED.overtime_minutes,
+           shortfall_minutes = EXCLUDED.shortfall_minutes,
+           late_minutes = EXCLUDED.late_minutes,
+           early_exit_minutes = EXCLUDED.early_exit_minutes,
+           source = 'manual',
+           updated_at = now()
+         RETURNING *`,
+        [
+          id('att'), orgId, b.employee_id, onDate, b.status,
+          b.check_in_at ?? null, b.check_out_at ?? null, derived.work_minutes,
+          b.notes ?? null, userId, shift?.id ?? null, derived.expected_minutes,
+          derived.overtime_minutes, derived.shortfall_minutes,
+          derived.late_minutes, derived.early_exit_minutes,
+        ],
+      );
+
+      return { data: { ...row, shift_name: shift?.name ?? null } };
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════ CHECK IN
+  app.post(
+    '/hr/attendance/check-in',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.attendance.edit')],
+      schema: { body: body({ employee_id: v.id('emp'), remote: { type: 'boolean' } }, ['employee_id']) },
+    },
+    async (request) => {
+      const { orgId, userId } = request.ctx;
+
+      const existing = await db.one(
+        `SELECT * FROM attendance
+          WHERE org_id = $1 AND employee_id = $2 AND on_date = current_date`,
+        [orgId, request.body.employee_id],
+      );
+      if (existing?.check_in_at) {
+        throw badRequest('Already checked in today.', { checked_in_at: existing.check_in_at });
+      }
+
+      const onDate = toISODate(new Date());
+      await ensureDefaultShift(db, orgId);
+      const shift = await shiftForEmployee(db, orgId, request.body.employee_id, onDate);
+      const derived = deriveDay({ shift, onDate, checkIn: new Date().toISOString(), checkOut: null, workMinutes: null });
+
+      const row = await db.one(
+        `INSERT INTO attendance
+           (id, org_id, employee_id, on_date, status, check_in_at, recorded_by,
+            shift_id, expected_minutes, late_minutes, source)
+         VALUES ($1,$2,$3,current_date,$4,now(),$5,$6,$7,$8,'self')
+         ON CONFLICT (org_id, employee_id, on_date) DO UPDATE SET
+           check_in_at = now(), status = EXCLUDED.status,
+           shift_id = EXCLUDED.shift_id, expected_minutes = EXCLUDED.expected_minutes,
+           late_minutes = EXCLUDED.late_minutes, updated_at = now()
+         RETURNING *`,
+        [
+          id('att'), orgId, request.body.employee_id,
+          request.body.remote ? 'remote' : 'present', userId,
+          shift?.id ?? null, derived.expected_minutes, derived.late_minutes,
+        ],
+      );
+
+      return {
+        data: {
+          ...row,
+          shift_name: shift?.name ?? null,
+          late: derived.late_minutes > 0 ? formatMinutes(derived.late_minutes) : null,
+        },
+      };
+    },
+  );
+
+  app.post(
+    '/hr/attendance/check-out',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.attendance.edit')],
+      schema: { body: body({ employee_id: v.id('emp') }, ['employee_id']) },
+    },
+    async (request) => {
+      const { orgId } = request.ctx;
+
+      const existing = await db.one(
+        `SELECT * FROM attendance
+          WHERE org_id = $1 AND employee_id = $2 AND on_date = current_date`,
+        [orgId, request.body.employee_id],
+      );
+      if (!existing?.check_in_at) throw badRequest('No check-in recorded for today.');
+      if (existing.check_out_at) {
+        throw badRequest('Already checked out today.', { checked_out_at: existing.check_out_at });
+      }
+
+      const onDate = toISODate(existing.on_date);
+      const shift = await shiftForEmployee(db, orgId, request.body.employee_id, onDate);
+      const derived = deriveDay({
+        shift,
+        onDate,
+        checkIn: existing.check_in_at,
+        checkOut: new Date().toISOString(),
+        workMinutes: null,
+        status: existing.status,
+      });
+
+      const row = await db.one(
+        `UPDATE attendance
+            SET check_out_at = now(), work_minutes = $3, shift_id = $4,
+                expected_minutes = $5, overtime_minutes = $6, shortfall_minutes = $7,
+                early_exit_minutes = $8
+          WHERE id = $1 AND org_id = $2 RETURNING *`,
+        [
+          existing.id, orgId, derived.work_minutes, shift?.id ?? null,
+          derived.expected_minutes, derived.overtime_minutes,
+          derived.shortfall_minutes, derived.early_exit_minutes,
+        ],
+      );
+
+      return {
+        data: {
+          ...row,
+          worked: formatMinutes(row.work_minutes),
+          overtime: row.overtime_minutes ? formatMinutes(row.overtime_minutes) : null,
+        },
+      };
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════════ LOG
+  app.get(
+    '/hr/attendance',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.attendance.view')],
+      schema: {
+        querystring: query({
+          employee_id: v.id('emp'),
+          from: v.date,
+          to: v.date,
+          status: v.enum(['present', 'absent', 'half_day', 'on_leave', 'remote', 'holiday', 'weekend']),
+        }),
+      },
+    },
+    async (request) => {
+      const { orgId } = request.ctx;
+      const page = paginate({ ...request.query, allowedSorts: ['on_date', 'created_at'] });
+      const qs = request.query;
+
+      const where = ['a.org_id = $1'];
+      const values = [orgId];
+
+      if (qs.employee_id) { values.push(qs.employee_id); where.push(`a.employee_id = $${values.length}`); }
+      if (qs.from) { values.push(qs.from); where.push(`a.on_date >= $${values.length}`); }
+      if (qs.to) { values.push(qs.to); where.push(`a.on_date <= $${values.length}`); }
+      if (qs.status) { values.push(qs.status); where.push(`a.status = $${values.length}`); }
+
+      const clause = where.join(' AND ');
+      const join = `FROM attendance a JOIN employees e ON e.id = a.employee_id`;
+
+      const [rows, total] = await Promise.all([
+        db.rows(
+          `SELECT a.*, e.first_name, e.last_name, e.employee_code ${join}
+            WHERE ${clause} ORDER BY a.${page.orderBy} LIMIT ${page.limit} OFFSET ${page.offset}`,
+          values,
+        ),
+        db.one(`SELECT count(*)::int AS n ${join} WHERE ${clause}`, values),
+      ]);
+
+      return {
+        data: rows.map((r) => ({
+          ...r,
+          name: [r.first_name, r.last_name].filter(Boolean).join(' '),
+        })),
+        meta: page.meta(total.n),
+      };
+    },
+  );
+
+  // ════════════════════════════════════════════════════ OVERTIME & SHORT TIME
+  /**
+   * The exception report: who worked beyond their shift and who fell short.
+   *
+   * Ranked by net minutes rather than gross, because a week of two hours over
+   * and two hours under is not the same story as a week of four hours over.
+   */
+  app.get(
+    '/hr/attendance/overtime',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.attendance.view')],
+      schema: {
+        querystring: query({
+          from: v.date,
+          to: v.date,
+          department_id: v.id('dep'),
+          employee_id: v.id('emp'),
+        }),
+      },
+    },
+    async (request) => {
+      const { orgId } = request.ctx;
+
+      // Default to the current month — the period anybody actually asks about.
+      const today = new Date();
+      const from = request.query.from ?? toISODate(new Date(today.getFullYear(), today.getMonth(), 1));
+      const to = request.query.to ?? toISODate(today);
+
+      const values = [orgId, from, to];
+      let filter = '';
+      if (request.query.department_id) {
+        values.push(request.query.department_id);
+        filter += ` AND e.department_id = $${values.length}`;
+      }
+      if (request.query.employee_id) {
+        values.push(request.query.employee_id);
+        filter += ` AND e.id = $${values.length}`;
+      }
+
+      const rows = await db.rows(
+        `SELECT e.id AS employee_id, e.first_name, e.last_name, e.employee_code, e.designation,
+                d.name AS department_name,
+                count(*) FILTER (WHERE a.status IN ('present','remote'))::int AS days_present,
+                count(*) FILTER (WHERE a.status = 'half_day')::int             AS days_half,
+                count(*) FILTER (WHERE a.status = 'absent')::int               AS days_absent,
+                count(*) FILTER (WHERE a.overtime_minutes > 0)::int            AS days_overtime,
+                count(*) FILTER (WHERE a.late_minutes > 0)::int                AS days_late,
+                COALESCE(sum(a.work_minutes), 0)::int                          AS work_minutes,
+                COALESCE(sum(a.expected_minutes), 0)::int                      AS expected_minutes,
+                COALESCE(sum(a.overtime_minutes), 0)::int                      AS overtime_minutes,
+                COALESCE(sum(a.shortfall_minutes), 0)::int                     AS shortfall_minutes,
+                COALESCE(sum(a.late_minutes), 0)::int                          AS late_minutes
+           FROM employees e
+           LEFT JOIN departments d ON d.id = e.department_id
+           LEFT JOIN attendance a ON a.employee_id = e.id
+                                 AND a.on_date BETWEEN $2::date AND $3::date
+          WHERE e.org_id = $1 AND e.archived_at IS NULL AND e.status <> 'exited' ${filter}
+          GROUP BY e.id, e.first_name, e.last_name, e.employee_code, e.designation, d.name
+          ORDER BY sum(a.overtime_minutes) DESC NULLS LAST, e.first_name`,
+        values,
+      );
+
+      const data = rows.map((r) => ({
+        ...r,
+        name: [r.first_name, r.last_name].filter(Boolean).join(' '),
+        net_minutes: r.overtime_minutes - r.shortfall_minutes,
+        overtime_hours: formatMinutes(r.overtime_minutes),
+        shortfall_hours: formatMinutes(r.shortfall_minutes),
+        worked_hours: formatMinutes(r.work_minutes),
+        expected_hours: formatMinutes(r.expected_minutes),
+        // What payroll will actually pay extra for, at the usual 2× rate.
+        overtime_units: Math.round((r.overtime_minutes / 60) * 100) / 100,
+      }));
+
+      const totals = data.reduce(
+        (acc, r) => ({
+          overtime_minutes: acc.overtime_minutes + r.overtime_minutes,
+          shortfall_minutes: acc.shortfall_minutes + r.shortfall_minutes,
+          work_minutes: acc.work_minutes + r.work_minutes,
+          expected_minutes: acc.expected_minutes + r.expected_minutes,
+        }),
+        { overtime_minutes: 0, shortfall_minutes: 0, work_minutes: 0, expected_minutes: 0 },
+      );
+
+      return {
+        data,
+        meta: {
+          from,
+          to,
+          headcount: data.length,
+          ...totals,
+          overtime_hours: formatMinutes(totals.overtime_minutes),
+          shortfall_hours: formatMinutes(totals.shortfall_minutes),
+          utilisation: totals.expected_minutes
+            ? Math.round((totals.work_minutes / totals.expected_minutes) * 1000) / 10
+            : null,
+        },
+      };
+    },
+  );
+
+  // ══════════════════════════════════════════════════════ PAYROLL'S VIEW
+  /**
+   * The only thing payroll is allowed to know about attendance.
+   *
+   * It is an internal, service-to-service read: payroll never touches HR's
+   * tables, and HR never learns what a day is worth in rupees.
+   */
+  app.get(
+    '/internal/attendance/summary',
+    {
+      preHandler: [requireInternal()],
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            org_id: { type: 'string', minLength: 1, maxLength: 64 },
+            from: v.date,
+            to: v.date,
+            employee_ids: { type: 'string', maxLength: 20_000 },
+          },
+          required: ['org_id', 'from', 'to'],
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request) => {
+      const { org_id: orgId, from, to } = request.query;
+      const employeeIds = request.query.employee_ids
+        ? request.query.employee_ids.split(',').filter(Boolean)
+        : null;
+
+      const rows = await periodSummary(db, orgId, { from, to, employeeIds });
+
+      return {
+        data: rows.map((r) => ({
+          ...r,
+          // A half day is half a day's pay; saying so here keeps the rule in
+          // one place rather than in every payroll formula.
+          payable_days: r.days_present + r.days_half * 0.5 + r.days_leave,
+          overtime_hours: Math.round((r.overtime_minutes / 60) * 100) / 100,
+        })),
+        meta: { from, to, org_id: orgId },
+      };
+    },
+  );
+}

@@ -163,10 +163,27 @@ async function main() {
   // ── 9 ── roles and people ─────────────────────────────────────────────────
   step(9, 'Roles and membership');
   const roles = await call('/roles');
-  check('system roles seeded', roles.body?.data?.length === 4,
-    roles.body?.data?.map((r) => r.slug).join(', '));
+  const slugs = (roles.body?.data ?? []).map((r) => r.slug).sort();
+  check('system roles seeded',
+    ['admin', 'employee', 'guest', 'member', 'owner'].every((slug) => slugs.includes(slug)),
+    slugs.join(', '));
   check('owner role has implicit access',
     roles.body?.data?.find((r) => r.slug === 'owner')?.implicit_all === true);
+
+  // The portal role is the narrowest on the platform. Asserting on the
+  // EXPANDED set, not the pattern, is what proves `*.self.*` cannot reach
+  // anything but the endpoints that resolve a person from their own session.
+  const employeeRole = roles.body?.data?.find((r) => r.slug === 'employee');
+  const employeePerms = employeeRole?.permissions ?? [];
+  check('the employee role holds only self permissions',
+    employeePerms.length > 0 && employeePerms.every((p) => p.split('.')[1] === 'self'),
+    employeePerms.join(', '));
+  check('the employee role can see its own payslips and attendance',
+    ['hr.self.view', 'hr.self.attendance', 'payroll.self.payslips']
+      .every((p) => employeePerms.includes(p)),
+    employeePerms.join(', '));
+  check('the employee role cannot read anybody else’s record',
+    !employeePerms.some((p) => ['hr.employees.view', 'payroll.payslips.view', 'core.members.view'].includes(p)));
 
   // System roles are pattern-based, so what they grant must be computed live
   // and must track the app registry rather than a snapshot taken at signup.

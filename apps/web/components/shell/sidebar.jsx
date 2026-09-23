@@ -32,6 +32,7 @@ export function Sidebar({ collapsed, onToggle }) {
   return (
     <nav
       aria-label="Main"
+      data-tour="sidebar"
       style={{ width: collapsed ? 'var(--nav-width-collapsed)' : 'var(--nav-width)' }}
       className={cn(
         'flex shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--surface-raised)]',

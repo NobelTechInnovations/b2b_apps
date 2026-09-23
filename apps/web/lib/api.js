@@ -40,7 +40,10 @@ async function refreshSession() {
   return refreshing;
 }
 
-export async function api(path, { method = 'GET', body, query, signal, retry = true, headers } = {}) {
+export async function api(
+  path,
+  { method = 'GET', body, query, signal, retry = true, headers, redirectOnUnauthorized = true } = {},
+) {
   const url = new URL(`${API_URL}/api${path.startsWith('/') ? path : `/${path}`}`);
 
   if (query) {
@@ -61,9 +64,20 @@ export async function api(path, { method = 'GET', body, query, signal, retry = t
   // The access token is short-lived by design; renew it and carry on silently.
   if (response.status === 401 && retry && !path.startsWith('/auth/')) {
     if (await refreshSession()) {
-      return api(path, { method, body, query, signal, retry: false, headers });
+      return api(path, { method, body, query, signal, retry: false, headers, redirectOnUnauthorized });
     }
-    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+
+    /*
+     * Usually a dead session means "go and sign in". Not always: the join
+     * page calls an authenticated endpoint precisely to find out whether the
+     * invited person has an account yet, and a 401 there is the answer, not
+     * an error. Bouncing it to /login would strand every new invitee.
+     */
+    if (
+      redirectOnUnauthorized &&
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login')
+    ) {
       window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
     }
   }

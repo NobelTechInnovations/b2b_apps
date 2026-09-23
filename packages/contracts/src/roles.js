@@ -37,4 +37,30 @@ export const SYSTEM_ROLES = [
     denies: ['billing.*.*', 'core.*.*'],
     protected: true,
   },
+  {
+    /**
+     * The employee portal role.
+     *
+     * Deliberately the narrowest role on the platform: it grants only `self`
+     * permissions, which every service resolves from the signed-in user rather
+     * than from an id in the request. An employee holding this role cannot
+     * name somebody else's record to read it, because no endpoint they can
+     * reach takes an employee id at all.
+     *
+     * It is NOT a variant of `guest`. Guest can read whatever it is shown;
+     * this role can read exactly one person's data — their own.
+     */
+    slug: 'employee',
+    name: 'Employee',
+    description: 'Their own payslips, attendance, leave and documents. Nothing else.',
+    grants: ['*.self.*'],
+    denies: ['billing.*.*', 'core.*.*', 'catalog.*.*'],
+    portal: true,
+    protected: true,
+  },
 ];
+
+/** Roles whose members land in the employee portal rather than the workspace. */
+export const PORTAL_ROLES = new Set(
+  SYSTEM_ROLES.filter((role) => role.portal).map((role) => role.slug),
+);

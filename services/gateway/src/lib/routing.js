@@ -14,6 +14,10 @@ const PLATFORM_ROUTES = [
   { prefix: 'roles',         service: 'tenancy' },
   { prefix: 'permissions',   service: 'tenancy' },
   { prefix: 'invitations',   service: 'tenancy',  requiresOrg: false },
+  // Looking up an invitation must work before you have an account — that is
+  // the whole point of being invited. Its own prefix, because the gateway's
+  // policy is per namespace and the rest of `invitations` needs a session.
+  { prefix: 'invite',        service: 'tenancy',  public: true },
   { prefix: 'teams',         service: 'tenancy' },
   { prefix: 'apps',          service: 'catalog' },
   { prefix: 'plans',         service: 'billing',  public: true },
@@ -22,6 +26,10 @@ const PLATFORM_ROUTES = [
   { prefix: 'notifications', service: 'notifier' },
   { prefix: 'search',        service: 'search' },
   { prefix: 'audit',         service: 'audit' },
+  // Attendance terminals have no user and no token. They authenticate with a
+  // device key the HR service issued, which it verifies itself — the gateway
+  // only proves that the request came through it.
+  { prefix: 'device-sync',   service: 'hr',       public: true },
 ];
 
 export function buildRoutingTable() {
