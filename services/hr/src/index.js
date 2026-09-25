@@ -26,10 +26,8 @@ const NAME = 'hr';
 const db = createDb({ url: config.databaseUrl, appName: NAME, max: 15 });
 await runMigrations({ db, dir: path.join(here, '..', 'migrations'), logger: console });
 
-const bus = await createBus({ servers: config.natsUrl, name: NAME }).catch((error) => {
-  console.warn(`  ! event bus unavailable (${error.message}) — events will queue in the outbox`);
-  return null;
-});
+// Portal linking and approval workflows require the consumers to be running.
+const bus = await createBus({ servers: config.natsUrl, name: NAME });
 
 const app = await createService({ name: NAME, config, db, bus });
 
@@ -56,7 +54,7 @@ await app.register(performanceRoutes);
 await app.register(employeeDocumentRoutes);
 
 if (bus) {
-  registerConsumers({ bus, db, logger: app.log });
+  await registerConsumers({ bus, db, logger: app.log });
   startOutboxRelay({ db, bus, logger: app.log });
 }
 

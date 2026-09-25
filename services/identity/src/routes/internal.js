@@ -7,6 +7,15 @@ import { requireInternal, notFound, badRequest } from '@nexus/service-kit';
 export async function internalRoutes(app) {
   const { db } = app;
 
+  app.get('/internal/sessions/:sessionId', { preHandler: requireInternal() }, async (request) => {
+    const row = await db.one(
+      `SELECT s.id FROM sessions s JOIN users u ON u.id = s.user_id
+       WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
+         AND s.expires_at > now() AND u.status = 'active'`,
+      [request.params.sessionId, request.query.user_id ?? null]);
+    return { data: { active: Boolean(row) } };
+  });
+
   /** Tenancy asks for user details when listing members. */
   app.post(
     '/internal/users/lookup',

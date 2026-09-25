@@ -21,7 +21,8 @@ Then open **http://localhost:3000** and create a workspace.
 
 ```bash
 pnpm smoke           # the platform: auth, tenancy, entitlements, permissions
-pnpm smoke:all       # every suite — 398 assertions across seven surfaces
+pnpm smoke:all       # every suite
+pnpm check:tokens    # every design token used is actually defined
 ```
 
 | Suite | Covers |
@@ -33,6 +34,7 @@ pnpm smoke:all       # every suite — 398 assertions across seven surfaces
 | `pnpm smoke:invoicing` | GST arithmetic, numbering, payments, ageing, documents |
 | `pnpm smoke:payroll` | shifts, punch terminals, overtime, PF/ESI/PT/TDS, payslips |
 | `pnpm smoke:portal` | employee self-service — and everything it must **not** reach |
+| `pnpm smoke:notifications` | who gets told what — and who does not |
 
 | | |
 |---|---|
@@ -79,6 +81,7 @@ services/
   tenancy/          organizations, members, roles, permissions
   catalog/          app registry and the marketplace
   billing/          plans, subscriptions, entitlements
+  notifier/         events in, notifications out
   crm/              leads, contacts, companies, deals, activities
   hr/               people, shifts, attendance, devices, leave, reviews, letters
   payroll/          salary structures, payroll runs, payslips, statutory
@@ -90,7 +93,8 @@ packages/
   db-kit/           pooled pg, migrations, transactions, outbox
   bus/              NATS JetStream + outbox relay
 infra/              docker-compose for local development
-scripts/            dev runner, smoke test
+scripts/            dev runner, smoke tests
+tools/device-bridge/ sends biometric-terminal punches to Nexus (see docs/DEVICE_SETUP.md)
 ```
 
 One repository, many independently deployable services. They share published

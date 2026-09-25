@@ -105,11 +105,11 @@ async function main() {
   step(4, 'Quote a subscription');
   const quote = await call('/subscriptions/quote', {
     method: 'POST',
-    body: { plan: 'growth', app_slugs: ['crm', 'manufacturing'], seats: 25, cycle: 'monthly' },
+    body: { plan: 'growth', app_slugs: ['crm', 'payroll'], seats: 25, cycle: 'monthly' },
   });
   check('quote returned', quote.status === 200, `status ${quote.status}`);
   check('dependencies auto-resolved',
-    quote.body?.data?.apps?.includes('erp'),
+    quote.body?.data?.apps?.includes('hr'),
     `apps: ${quote.body?.data?.apps?.join(', ')}`);
   check('total is priced', Number(quote.body?.data?.total) > 0, `₹${quote.body?.data?.total}`);
 
@@ -213,17 +213,17 @@ async function main() {
   step(10, 'Add an app that needs another');
   const added = await call('/subscriptions/current/apps', {
     method: 'POST',
-    body: { app_slug: 'accounting' },
+    body: { app_slug: 'payroll' },
   });
-  check('accounting added', added.status === 200, `status ${added.status}`);
-  check('invoicing pulled in automatically',
-    added.body?.data?.added?.includes('invoicing'),
+  check('payroll added', added.status === 200, `status ${added.status}`);
+  check('payroll provisioned',
+    added.body?.data?.added?.includes('payroll'),
     `added: ${added.body?.data?.added?.join(', ')}`);
 
   await new Promise((r) => setTimeout(r, 1_200));
   const after = await call('/me/workspace');
-  check('accounting now entitled', after.body?.data?.apps?.includes('accounting'));
-  check('invoicing now entitled', after.body?.data?.apps?.includes('invoicing'));
+  check('payroll now entitled', after.body?.data?.apps?.includes('payroll'));
+  check('HR dependency remains entitled', after.body?.data?.apps?.includes('hr'));
 
   // ── 11 ── sessions ────────────────────────────────────────────────────────
   step(11, 'Session handling');

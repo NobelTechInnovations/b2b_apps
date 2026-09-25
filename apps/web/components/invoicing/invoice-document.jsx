@@ -54,7 +54,7 @@ export function InvoiceDocumentBody({ doc }) {
         <div className="flex items-start justify-between gap-8">
           <div className="min-w-0">
             {template.logo_url && (
-              // eslint-disable-next-line @next/next/no-img-element
+
               <img src={template.logo_url} alt="" className="mb-2 max-h-14 max-w-[180px] object-contain" />
             )}
             <h1 className="text-base font-bold tracking-[-0.01em]">{seller.name}</h1>
@@ -341,7 +341,7 @@ export function InvoiceDocumentBody({ doc }) {
         {template.show_signature && (
           <div className="flex flex-col items-end justify-end text-right">
             {template.signature_url && (
-              // eslint-disable-next-line @next/next/no-img-element
+
               <img src={template.signature_url} alt="" className="mb-1 max-h-12 object-contain" />
             )}
             <div className="w-40 border-t border-[#9ca3af] pt-1">

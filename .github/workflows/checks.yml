@@ -1,0 +1,36 @@
+name: Local stack checks
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm --filter @nexus/web build
+      - name: Start disposable local infrastructure
+        run: |
+          cp .env.example .env
+          sed -i 's/REGISTER_PER_HOUR=10/REGISTER_PER_HOUR=1000/' .env
+          echo 'RATE_LIMIT_MAX=10000' >> .env
+          pnpm infra:up
+          docker compose -f infra/docker-compose.yml exec -T postgres sh -c 'until pg_isready -U nexus; do sleep 1; done'
+          node scripts/dev.js identity tenancy catalog billing gateway crm hr payroll documents invoicing tasks notifier audit > /tmp/nexus-ci.log 2>&1 &
+          node scripts/wait-ready.js
+      - run: pnpm test
+      - run: pnpm smoke:all
+      - name: Logs on failure
+        if: failure()
+        run: tail -n 250 /tmp/nexus-ci.log
+      - name: Stop local infrastructure
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v

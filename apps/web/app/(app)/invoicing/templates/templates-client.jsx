@@ -510,7 +510,7 @@ function ImagePicker({ label, value, onChange, toast, icon: Icon = Upload }) {
     <Field label={label}>
       {value ? (
         <div className="flex items-center gap-3 rounded-[var(--radius-md)] border border-[var(--border-subtle)] p-2">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
+
           <img src={value} alt="" className="max-h-10 max-w-[7rem] object-contain" />
           <div className="flex-1" />
           <Button variant="ghost" size="sm" icon={X} onClick={() => onChange(null)} />

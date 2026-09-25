@@ -1,4 +1,5 @@
 import { id, paginate } from '@nexus/db-kit';
+import { EVENTS } from '@nexus/contracts/events';
 import {
   requirePermission, body, params, query, validate as v, notFound, badRequest, conflict,
 } from '@nexus/service-kit';
@@ -261,6 +262,36 @@ export async function performanceRoutes(app) {
               WHERE cycle_id = $1 AND org_id = $2 AND status <> 'acknowledged'`,
             [cycle.id, orgId],
           );
+
+          const readers = await tx.rows(
+            `SELECT e.user_id FROM reviews r JOIN employees e ON e.id = r.employee_id
+              WHERE r.cycle_id = $1 AND r.org_id = $2 AND e.user_id IS NOT NULL`,
+            [cycle.id, orgId],
+          );
+          tx.emit({
+            type: EVENTS.REVIEW_SHARED,
+            org_id: orgId,
+            actor_id: request.ctx.userId,
+            data: { cycle_id: cycle.id, cycle_name: cycle.name, user_ids: readers.map((r) => r.user_id) },
+          });
+        }
+
+        // Opening self-reviews is an ask of every person in the cycle.
+        if (target === 'self_review') {
+          const writers = await tx.rows(
+            `SELECT e.user_id FROM reviews r JOIN employees e ON e.id = r.employee_id
+              WHERE r.cycle_id = $1 AND r.org_id = $2 AND e.user_id IS NOT NULL`,
+            [cycle.id, orgId],
+          );
+          tx.emit({
+            type: EVENTS.REVIEW_OPENED,
+            org_id: orgId,
+            actor_id: request.ctx.userId,
+            data: {
+              cycle_id: cycle.id, cycle_name: cycle.name,
+              due: cycle.self_review_due, user_ids: writers.map((r) => r.user_id),
+            },
+          });
         }
 
         return row;

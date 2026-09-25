@@ -12,8 +12,8 @@ import { EVENTS } from '@nexus/contracts/events';
  * invitation was sent to the address on the employee record, so an acceptance
  * for that address is an acceptance by that employee.
  */
-export function registerConsumers({ bus, db, logger }) {
-  bus.subscribe('hr', EVENTS.MEMBER_JOINED, async (event) => {
+export async function registerConsumers({ bus, db, logger }) {
+  await bus.subscribe('hr', EVENTS.MEMBER_JOINED, async (event) => {
     const { org_id: orgId, data } = event;
     if (!orgId || !data?.user_id || !data?.email) return;
 
@@ -49,7 +49,7 @@ export function registerConsumers({ bus, db, logger }) {
    * `revised_at` guards against a redelivered or out-of-order event quietly
    * reinstating a superseded figure on an offer letter.
    */
-  bus.subscribe('hr', EVENTS.SALARY_REVISED, async (event) => {
+  await bus.subscribe('hr', EVENTS.SALARY_REVISED, async (event) => {
     const { org_id: orgId, data } = event;
     if (!orgId || !data?.employee_id) return;
 
@@ -79,7 +79,7 @@ export function registerConsumers({ bus, db, logger }) {
    * employee — being taken off the system is not the same as leaving the job,
    * and unlinking the record would orphan their payslips.
    */
-  bus.subscribe('hr', EVENTS.MEMBER_REMOVED, async (event) => {
+  await bus.subscribe('hr', EVENTS.MEMBER_REMOVED, async (event) => {
     const { org_id: orgId, data } = event;
     if (!orgId || !data?.user_id) return;
 

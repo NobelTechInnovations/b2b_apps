@@ -23,15 +23,18 @@ export class ApiError extends Error {
 
 let refreshing = null;
 
-async function refreshSession() {
+export async function refreshSession() {
   // Collapse concurrent 401s into a single refresh.
-  refreshing ??= fetch(`${API_URL}/api/auth/refresh`, {
+  const renew = () => fetch(`${API_URL}/api/auth/refresh`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
     body: '{}',
   })
-    .then((response) => response.ok)
+    .then((response) => response.ok);
+  refreshing ??= (typeof navigator !== 'undefined' && navigator.locks
+    ? navigator.locks.request('nexus-session-refresh', renew)
+    : renew())
     .catch(() => false)
     .finally(() => {
       refreshing = null;

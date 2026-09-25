@@ -139,6 +139,10 @@ export async function rebuildDay(tx, { orgId, employeeId, onDate, shift, recorde
        early_exit_minutes = EXCLUDED.early_exit_minutes,
        source = 'device',
        updated_at = now()
+     -- A day an approver has decided by hand is not overwritten by punches
+     -- that arrive afterwards. The approver saw the evidence; the punches stay
+     -- in the punch log for anybody who wants to question the decision.
+     WHERE attendance.source <> 'manual' OR attendance.approved_by IS NULL
      RETURNING *`,
     [
       id('att'), orgId, employeeId, onDate, derived.status,
@@ -149,6 +153,7 @@ export async function rebuildDay(tx, { orgId, employeeId, onDate, shift, recorde
     ],
   );
 
+  if (!row) return { kept_manual: true, punch_count: folded.punch_count };
   return { ...row, punch_count: folded.punch_count, open: folded.open };
 }
 

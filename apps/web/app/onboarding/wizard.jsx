@@ -93,7 +93,7 @@ export default function OnboardingWizard({ user, plans, appPrices }) {
     setForm((f) => ({
       ...f,
       industry,
-      apps: f.apps.length ? f.apps : (PRESETS[industry] ?? []),
+      apps: f.apps.length ? f.apps : (PRESETS[industry] ?? []).filter(slug => APPS.some(app => app.slug === slug && app.status === 'available')),
     }));
   }
 

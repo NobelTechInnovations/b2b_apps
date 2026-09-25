@@ -88,6 +88,7 @@ export async function createService({
       issuer: config.tokenIssuer,
       audience: 'nexus',
       serviceToken: config.serviceToken,
+      sessionDb: name === 'identity' ? db : undefined,
     }),
   );
 

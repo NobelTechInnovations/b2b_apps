@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation';
 import { Receipt, FileSpreadsheet, Download, Table2 } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
@@ -168,7 +169,7 @@ export default function PayslipsClient() {
                     </TD>
                     <TD>{row.label}</TD>
                     <TD align="right" numeric>
-                      {row.payable_days}
+                      {Number(row.payable_days)}
                       {Number(row.lop_days) > 0 && (
                         <span className="ml-1 text-xs text-[var(--color-critical-600)]">−{row.lop_days}</span>
                       )}
@@ -234,13 +235,36 @@ function RegisterSheet({ register, onClose }) {
     URL.revokeObjectURL(url);
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[var(--surface-base)]">
+  // Closes on Escape, like every other full-screen surface in the app.
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [onClose]);
+
+  /*
+   * Portalled to <body>, as modals and drawers are. Rendered in place it sat
+   * inside the page's stacking context, so the shell's sidebar and top bar
+   * painted through it — and with no opaque background the list underneath
+   * showed through as well.
+   */
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Salary register — ${run.label}`}
+      className="fixed inset-0 z-[60] flex flex-col bg-[var(--surface-page)]"
+    >
       <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border-subtle)] px-5 py-3">
         <div>
           <h2 className="text-md font-semibold">Salary register — {run.label}</h2>
           <p className="text-sm text-[var(--text-secondary)]">
-            {totals.headcount} people · gross {money(totals.gross)} · net {money(totals.net)}
+            {totals.headcount} {totals.headcount === 1 ? 'person' : 'people'} · gross {money(totals.gross)} · net {money(totals.net)}
           </p>
         </div>
         <div className="flex-1" />
@@ -278,11 +302,11 @@ function RegisterSheet({ register, onClose }) {
           <tbody>
             {register.data.map((row) => (
               <tr key={row.payslip_id} className="border-b border-[var(--border-subtle)]">
-                <td className="sticky left-0 z-10 bg-[var(--surface-base)] px-4 py-2">
+                <td className="sticky left-0 z-10 bg-[var(--surface-page)] px-4 py-2">
                   <p className="truncate font-medium">{row.employee_name}</p>
                   <p className="truncate text-xs tabular text-[var(--text-tertiary)]">{row.employee_code}</p>
                 </td>
-                <td className="px-3 py-2 text-right tabular">{row.payable_days}</td>
+                <td className="px-3 py-2 text-right tabular">{Number(row.payable_days)}</td>
                 {columns.earnings.map((col) => (
                   <td key={col.code} className="px-3 py-2 text-right tabular">
                     {row.components[col.code] ? money(row.components[col.code]) : '—'}
@@ -328,6 +352,7 @@ function RegisterSheet({ register, onClose }) {
           </tfoot>
         </table>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

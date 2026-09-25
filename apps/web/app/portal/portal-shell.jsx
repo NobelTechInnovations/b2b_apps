@@ -12,6 +12,7 @@ import { useWorkspace } from '@/lib/workspace';
 import { Avatar } from '@/components/ui/primitives';
 import { useTheme } from '@/lib/theme';
 import { cn } from '@/lib/cn';
+import { NotificationBell } from '@/components/shell/notification-bell';
 
 const TABS = [
   { href: '/portal', label: 'Overview', icon: LayoutDashboard, exact: true },
@@ -36,7 +37,7 @@ export function PortalShell({ user, organizations, children }) {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--surface-base)]">
+    <div className="min-h-screen bg-[var(--surface-page)]">
       <header className="sticky top-0 z-30 border-b border-[var(--border-subtle)] bg-[var(--surface-raised)]/85 backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-3 px-4 sm:px-6">
           <span className="flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-brand-600)] text-white">
@@ -48,6 +49,8 @@ export function PortalShell({ user, organizations, children }) {
           </div>
 
           <div className="flex-1" />
+
+          <NotificationBell />
 
           <button
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}

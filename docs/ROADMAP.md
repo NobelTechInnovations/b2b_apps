@@ -155,10 +155,16 @@ priced and described, but cannot yet be installed.
 
 ---
 
-## Phase 7 — Shared services
+## Phase 7 — Shared services — in progress
 
-`files`, `notifier`, `search`, `audit`. Attachments, in-app feed and email,
-cross-app search, immutable action log.
+Local milestone delivered: in-app notifications and an append-only, tenant-scoped
+published-event audit log. Settings → Audit log supports type/date filters and
+cursor pagination with `core.audit.view` enforcement. New task assignments now
+notify recipients even when assigned during creation.
+
+Remaining: durable shared file storage, cross-app search, email delivery and
+preferences, full mutation audit coverage, failed-event replay and tested restores.
+See `SHARED_SERVICES_STATUS.md` for scope and validation.
 
 ---
 
@@ -425,21 +431,99 @@ session, simply does not match the `WHERE` clause.
 
 ---
 
-## Phase 14 — Tasks & Projects
+## Stabilisation review — 24 September ✅
+A walkthrough of every flow after the Tasks module and the security hardening
+landed. What it found and fixed:
 
-Projects, tasks, subtasks, kanban, calendar, milestones, time tracking,
-comments, attachments. Cross-app task creation from CRM / HR / Helpdesk.
+- **Salary register rendered transparent over the page.** It used
+  `--surface-base`, a token that does not exist; an undefined custom property
+  silently resolves to nothing. It also wasn't portalled like modals are, so the
+  shell painted through it. `pnpm check:tokens` now fails on any undefined token.
+- **`relativeTime` was off by a unit everywhere** — each unit was paired with
+  the divisor of the one below it, so five minutes read "5 hours ago". Used on
+  17 screens since Phase 6. Fixed, with tests.
+- **Money showed one decimal** ("₹550.5") wherever paise were involved.
+- **The notification bell showed a permanent "unread" dot** that meant nothing.
+- **Manual attendance now needs approval.** See Phase 15 below.
+- The Tasks module was reviewed end to end in the browser — projects,
+  milestones, tasks, subtasks, comments, time, board drag-and-drop, calendar,
+  timesheets. No broken flows; only display polish (dates, status labels).
+
+## Phase 14 — Tasks & Projects — local review ready
+
+Implemented: tenant-scoped projects, tasks, subtasks, milestones, assignments,
+status/priority/due dates, kanban, calendar, time entries, comments, linked
+Documents attachments, dashboard counts and permission enforcement. CRM lead
+and HR employee screens can create source-linked tasks; the API also supports deals.
+
+The shared drawer focus bug is fixed. Tasks now has a muted plum header, compact
+summaries, a row-based My work view and responsive board/project layouts.
+
+Pending integrations: Helpdesk task creation awaits the Helpdesk service; direct
+file uploads use Documents. Notifications and immutable audit remain shared-service
+work. This phase is ready for local review, not a production-release claim.
+
+See [local delivery and next steps](LOCAL_REVIEW.md) for validation and remaining
+platform work.
 
 ---
 
-## Phase 15 — ERP
+## Phase 15 — Notifications, and approval for manual attendance ✅
+`services/notifier` on port 4006, HR migration 0005, `tools/device-bridge`.
+
+### Manual attendance needs an approver
+A punch terminal is evidence; a person typing a time is a claim. Attendance —
+the table payroll reads — only ever holds evidence or approved claims.
+
+- Device punches land directly, as before.
+- HR marking a day, the check-in/out buttons, and an employee's "I forgot to
+  punch" all become **requests**, unless the person acting holds
+  `hr.attendance.approve`. Payroll cannot pay on an unapproved entry because an
+  unapproved entry is not in the table payroll reads.
+- One open claim per person per day: a check-out completes the morning's
+  check-in rather than filing a second claim.
+- **Nobody decides a request they raised, or one about themselves.** The same
+  subject-based rule now applies to leave.
+- A rejection must say why; the employee sees the reason.
+- A day an approver decided by hand is **not overwritten** by punches that
+  arrive afterwards — the punches stay in the log for anyone who wants to
+  question the decision.
+
+### The device bridge
+Most terminals sold in India export punches as a file rather than calling a web
+address, so `tools/device-bridge/bridge.js` reads `attlog.dat` or a vendor CSV
+and posts it. Idempotent, remembers what it sent, handles time zones. Setup is
+in `docs/DEVICE_SETUP.md`. Direct push (ADMS / `iclock`) is not supported yet.
+
+### Notifications
+The notifier listens to events and routes each to exactly the people who need
+to act — "someone needs approving" is resolved to the members who **hold the
+approval permission**, through the same function the gateway uses.
+
+- Attendance corrections, leave requests and decisions, documents to
+  acknowledge, review cycles opening and being shared, tasks assigned and done.
+- The person who caused an event is never notified about it — enforced once in
+  the consumer, not remembered in every rule.
+- Redelivered events notify nobody twice (unique on event × recipient).
+- The inbox is reachable without a subscription: a lapsed workspace is the one
+  that most needs to read "your trial has ended".
+- A task created with an assignee now emits an assignment event; previously
+  only a *re*assignment did, so the commonest case was silent.
+- `scripts/smoke-notifications.js` — 28 checks, most of them about who does
+  **not** get told.
+
+Still to come: email delivery for notifications, per-person mute settings, and
+payslip-available notices (payroll does not yet know which employees have
+portal logins).
+
+## Phase 16 — ERP
 
 Products, categories, inventory, warehouses, purchase, sales, vendors, stock
 transfers and adjustments. **System of record for `product` and `stock`.**
 
 ---
 
-## Phase 16 — Accounting
+## Phase 17 — Accounting
 
 Invoices, recurring billing, payments, credit notes, taxes → then chart of
 accounts, journal entries, ledger, AR/AP, bank, cash, expenses, P&L, balance
@@ -448,47 +532,47 @@ billing and expenses.
 
 ---
 
-## Phase 17 — Helpdesk & Knowledge
+## Phase 18 — Helpdesk & Knowledge
 
 Tickets, teams, agents, SLA, canned responses, customer portal, knowledge base,
 spaces, articles, public KB.
 
 ---
 
-## Phase 18 — Discuss
+## Phase 19 — Discuss
 
 Channels, DMs, mentions, attachments.
 
 ---
 
-## Phase 19 — Manufacturing
+## Phase 20 — Manufacturing
 
 BOM, manufacturing orders, work centers, work orders, production planning,
 material consumption, finished goods, scrap, quality.
 
 ---
 
-## Phase 20 — BI
+## Phase 21 — BI
 
 Dashboards, charts, KPIs, reports, filters, drilldowns, scheduled reports,
 export. Reads from a per-app analytics projection, never from live app tables.
 
 ---
 
-## Phase 21 — Automation
+## Phase 22 — Automation
 
 Trigger → conditions → actions, running off the event bus. Visual builder.
 
 ---
 
-## Phase 22 — Integrations
+## Phase 23 — Integrations
 
 WhatsApp, email, Google, Microsoft, Shopify, WooCommerce, payment gateways,
 shipping, calendar, storage.
 
 ---
 
-## Phase 23 — AI assistant
+## Phase 24 — AI assistant
 
 Natural-language queries and actions over the declared capability descriptors,
 respecting org, entitlement and permission boundaries.
@@ -497,5 +581,9 @@ respecting org, entitlement and permission boundaries.
 
 ## First sellable MVP
 
-Phases 1–10: **Platform core + CRM + HR + Tasks + Dashboard + Marketplace.**
+**Platform core + CRM + HR + Tasks + Dashboard + Marketplace.**
+
+The phase numbers evolved as Payroll, Documents and Invoicing were added. Track
+the MVP by these capabilities, plus the commercial and operational acceptance
+criteria in `LOCAL_REVIEW.md`, rather than the original phases 1–10 shorthand.
 That is a product a business can buy, not a demo.

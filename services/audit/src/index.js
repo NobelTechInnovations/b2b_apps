@@ -1,0 +1,16 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createService, startService } from '@nexus/service-kit';
+import { createDb, runMigrations } from '@nexus/db-kit';
+import { createBus } from '@nexus/bus';
+import { config } from './config.js';
+import { recordEvent } from './lib/consumer.js';
+import { auditRoutes } from './routes/audit.js';
+const name = 'audit';
+const db = createDb({ url: config.databaseUrl, appName: name });
+await runMigrations({ db, dir: path.join(path.dirname(fileURLToPath(import.meta.url)), '../migrations') });
+const bus = await createBus({ servers: config.natsUrl, name });
+const app = await createService({ name, config, db, bus });
+await app.register(auditRoutes);
+await bus.subscribe('audit', '>', event => recordEvent(db, event));
+await startService(app, { port: config.port, name });

@@ -5,6 +5,7 @@ import {
 import { deriveDay, formatMinutes } from '../lib/time.js';
 import { shiftForEmployee, ensureDefaultShift, periodSummary } from '../lib/shifts.js';
 import { toISODate } from '../lib/setup.js';
+import { writeManualDay, raiseRequest, decideRequest } from '../lib/attendance.js';
 
 export async function attendanceRoutes(app) {
   const { db } = app;
@@ -99,75 +100,38 @@ export async function attendanceRoutes(app) {
         ),
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const { orgId, userId } = request.ctx;
       const b = request.body;
+      const onDate = b.on_date ?? toISODate(new Date());
+
+      /*
+       * A typed-in day is a claim, not evidence. Someone who can approve
+       * attendance records it directly; anyone else raises a request that an
+       * approver has to accept before it reaches the table payroll reads.
+       */
+      if (!request.ctx.can('hr.attendance.approve')) {
+        const pending = await raiseRequest(db, {
+          orgId, employeeId: b.employee_id, onDate, status: b.status,
+          checkIn: b.check_in_at, checkOut: b.check_out_at, reason: b.notes,
+          via: 'hr', actorId: userId,
+        });
+        return reply.status(202).send({ data: { pending: true, request: pending } });
+      }
 
       const employee = await db.one(
-        `SELECT id, status FROM employees WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`,
+        `SELECT id FROM employees WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`,
         [b.employee_id, orgId],
       );
       if (!employee) throw notFound('Employee');
 
-      // Approved leave owns that day; marking over it would silently
-      // contradict the leave record.
-      const onLeave = await db.one(
-        `SELECT 1 AS yes FROM leave_requests
-          WHERE org_id = $1 AND employee_id = $2 AND status = 'approved'
-            AND COALESCE($3::date, current_date) BETWEEN start_date AND end_date`,
-        [orgId, b.employee_id, b.on_date ?? null],
-      );
-      if (onLeave) {
-        throw badRequest('This person has approved leave on that date. Cancel the leave first.');
-      }
-
-      const onDate = b.on_date ?? toISODate(new Date());
-      await ensureDefaultShift(db, orgId);
-      const shift = await shiftForEmployee(db, orgId, b.employee_id, onDate);
-
-      // The status a human picked is respected; the arithmetic around it is
-      // not left to them, so overtime means the same thing however a day
-      // was recorded.
-      const derived = deriveDay({
-        shift,
-        onDate,
-        checkIn: b.check_in_at ?? null,
-        checkOut: b.check_out_at ?? null,
-        workMinutes: null,
-        status: b.status,
+      const row = await writeManualDay(db, {
+        orgId, employeeId: b.employee_id, onDate, status: b.status,
+        checkIn: b.check_in_at, checkOut: b.check_out_at, notes: b.notes,
+        actorId: userId, approvedBy: userId,
       });
 
-      const row = await db.one(
-        `INSERT INTO attendance
-           (id, org_id, employee_id, on_date, status, check_in_at, check_out_at, work_minutes,
-            notes, recorded_by, shift_id, expected_minutes, overtime_minutes, shortfall_minutes,
-            late_minutes, early_exit_minutes, source)
-         VALUES ($1,$2,$3,$4::date,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'manual')
-         ON CONFLICT (org_id, employee_id, on_date) DO UPDATE SET
-           status = EXCLUDED.status,
-           check_in_at = COALESCE(EXCLUDED.check_in_at, attendance.check_in_at),
-           check_out_at = COALESCE(EXCLUDED.check_out_at, attendance.check_out_at),
-           work_minutes = COALESCE(EXCLUDED.work_minutes, attendance.work_minutes),
-           notes = COALESCE(EXCLUDED.notes, attendance.notes),
-           shift_id = EXCLUDED.shift_id,
-           expected_minutes = EXCLUDED.expected_minutes,
-           overtime_minutes = EXCLUDED.overtime_minutes,
-           shortfall_minutes = EXCLUDED.shortfall_minutes,
-           late_minutes = EXCLUDED.late_minutes,
-           early_exit_minutes = EXCLUDED.early_exit_minutes,
-           source = 'manual',
-           updated_at = now()
-         RETURNING *`,
-        [
-          id('att'), orgId, b.employee_id, onDate, b.status,
-          b.check_in_at ?? null, b.check_out_at ?? null, derived.work_minutes,
-          b.notes ?? null, userId, shift?.id ?? null, derived.expected_minutes,
-          derived.overtime_minutes, derived.shortfall_minutes,
-          derived.late_minutes, derived.early_exit_minutes,
-        ],
-      );
-
-      return { data: { ...row, shift_name: shift?.name ?? null } };
+      return { data: row };
     },
   );
 
@@ -178,7 +142,7 @@ export async function attendanceRoutes(app) {
       preHandler: [app.loadContext, requirePermission('hr.attendance.edit')],
       schema: { body: body({ employee_id: v.id('emp'), remote: { type: 'boolean' } }, ['employee_id']) },
     },
-    async (request) => {
+    async (request, reply) => {
       const { orgId, userId } = request.ctx;
 
       const existing = await db.one(
@@ -188,6 +152,18 @@ export async function attendanceRoutes(app) {
       );
       if (existing?.check_in_at) {
         throw badRequest('Already checked in today.', { checked_in_at: existing.check_in_at });
+      }
+
+      // The button is a manual entry like any other: without approval rights
+      // it becomes a request. The punch terminal is what records days
+      // without anybody having to sign them off.
+      if (!request.ctx.can('hr.attendance.approve')) {
+        const pending = await raiseRequest(db, {
+          orgId, employeeId: request.body.employee_id, onDate: toISODate(new Date()),
+          status: request.body.remote ? 'remote' : 'present',
+          checkIn: new Date().toISOString(), via: 'check_in', actorId: userId,
+        });
+        return reply.status(202).send({ data: { pending: true, request: pending } });
       }
 
       const onDate = toISODate(new Date());
@@ -203,7 +179,8 @@ export async function attendanceRoutes(app) {
          ON CONFLICT (org_id, employee_id, on_date) DO UPDATE SET
            check_in_at = now(), status = EXCLUDED.status,
            shift_id = EXCLUDED.shift_id, expected_minutes = EXCLUDED.expected_minutes,
-           late_minutes = EXCLUDED.late_minutes, updated_at = now()
+           late_minutes = EXCLUDED.late_minutes,
+           approved_by = EXCLUDED.recorded_by, approved_at = now(), updated_at = now()
          RETURNING *`,
         [
           id('att'), orgId, request.body.employee_id,
@@ -228,8 +205,18 @@ export async function attendanceRoutes(app) {
       preHandler: [app.loadContext, requirePermission('hr.attendance.edit')],
       schema: { body: body({ employee_id: v.id('emp') }, ['employee_id']) },
     },
-    async (request) => {
-      const { orgId } = request.ctx;
+    async (request, reply) => {
+      const { orgId, userId } = request.ctx;
+
+      if (!request.ctx.can('hr.attendance.approve')) {
+        // Completes the open request from this morning's check-in, if there
+        // is one, rather than filing a second claim for the same day.
+        const pending = await raiseRequest(db, {
+          orgId, employeeId: request.body.employee_id, onDate: toISODate(new Date()),
+          checkOut: new Date().toISOString(), via: 'check_in', actorId: userId,
+        });
+        return reply.status(202).send({ data: { pending: true, request: pending } });
+      }
 
       const existing = await db.one(
         `SELECT * FROM attendance
@@ -272,6 +259,92 @@ export async function attendanceRoutes(app) {
           overtime: row.overtime_minutes ? formatMinutes(row.overtime_minutes) : null,
         },
       };
+    },
+  );
+
+  // ═══════════════════════════════════════════════════════ APPROVAL QUEUE
+  /** Manual entries waiting for somebody to accept or reject them. */
+  app.get(
+    '/hr/attendance/requests',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.attendance.view')],
+      schema: {
+        querystring: query({
+          decision: v.enum(['pending', 'approved', 'rejected', 'withdrawn']),
+          employee_id: v.id('emp'),
+        }),
+      },
+    },
+    async (request) => {
+      const { orgId, userId } = request.ctx;
+      const qs = request.query;
+
+      const values = [orgId, qs.decision ?? 'pending'];
+      let filter = '';
+      if (qs.employee_id) { values.push(qs.employee_id); filter = ` AND r.employee_id = $${values.length}`; }
+
+      const rows = await db.rows(
+        `SELECT r.*, e.first_name, e.last_name, e.employee_code, e.designation,
+                a.status AS current_status, a.check_in_at AS current_check_in,
+                a.check_out_at AS current_check_out, a.source AS current_source
+           FROM attendance_requests r
+           JOIN employees e ON e.id = r.employee_id
+           LEFT JOIN attendance a
+             ON a.org_id = r.org_id AND a.employee_id = r.employee_id AND a.on_date = r.on_date
+          WHERE r.org_id = $1 AND r.decision = $2 ${filter}
+          ORDER BY r.on_date DESC, r.created_at DESC
+          LIMIT 200`,
+        values,
+      );
+
+      const pending = await db.one(
+        `SELECT count(*)::int AS n FROM attendance_requests WHERE org_id = $1 AND decision = 'pending'`,
+        [orgId],
+      );
+
+      return {
+        data: rows.map((r) => ({
+          ...r,
+          name: [r.first_name, r.last_name].filter(Boolean).join(' '),
+          // The screen greys out the buttons rather than letting an approver
+          // click into a refusal.
+          is_own: r.requested_by === userId,
+          overrides_device: r.current_source === 'device',
+        })),
+        meta: { pending: pending.n, can_approve: request.ctx.can('hr.attendance.approve') },
+      };
+    },
+  );
+
+  app.post(
+    '/hr/attendance/requests/:requestId/decide',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.attendance.approve')],
+      schema: {
+        params: params({ requestId: v.id('arq') }),
+        body: body(
+          { decision: v.enum(['approved', 'rejected']), note: v.text(500) },
+          ['decision'],
+        ),
+      },
+    },
+    async (request) => {
+      const { orgId, userId } = request.ctx;
+
+      if (request.body.decision === 'rejected' && !request.body.note?.trim()) {
+        // The person reading the rejection deserves to know why.
+        throw badRequest('Say why you are rejecting it.');
+      }
+
+      const result = await decideRequest(db, {
+        orgId,
+        requestId: request.params.requestId,
+        decision: request.body.decision,
+        note: request.body.note,
+        actorId: userId,
+      });
+
+      return { data: result };
     },
   );
 

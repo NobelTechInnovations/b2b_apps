@@ -1,0 +1,16 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createService, startService } from '@nexus/service-kit';
+import { createDb, runMigrations } from '@nexus/db-kit';
+import { createBus, startOutboxRelay } from '@nexus/bus';
+import { config } from './config.js';
+import { taskRoutes } from './routes/tasks.js';
+const name = 'tasks';
+const db = createDb({ url: config.databaseUrl, appName: name });
+await runMigrations({ db, dir: path.join(path.dirname(fileURLToPath(import.meta.url)), '../migrations') });
+const bus = await createBus({ servers: config.natsUrl, name });
+const app = await createService({ name, config, db, bus });
+await app.register(taskRoutes);
+const relay = startOutboxRelay({ db, bus, logger: app.log });
+app.addHook('onClose', async () => relay.stop());
+await startService(app, { port: config.port, name });

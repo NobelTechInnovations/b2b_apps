@@ -1,9 +1,10 @@
 'use client';
 
+import { NotificationBell } from './notification-bell';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  Search, Bell, ChevronsUpDown, Check, Plus, LogOut, User, Settings,
+  Search, ChevronsUpDown, Check, Plus, LogOut, User, Settings,
   Sun, Moon, Monitor, CreditCard, LifeBuoy, Building2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -99,10 +100,7 @@ export function Topbar({ organizations = [], onOpenSearch }) {
         </Link>
       )}
 
-      <Button variant="ghost" size="icon" aria-label="Notifications" className="relative">
-        <Bell className="size-[18px]" />
-        <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-[var(--color-brand-500)]" />
-      </Button>
+      <NotificationBell />
 
       {/* ── account ────────────────────────────────────────────────────────── */}
       <Menu

@@ -84,18 +84,26 @@ export async function proxyRoutes(app) {
     }
 
     if (entitlements.status === 'canceled' || entitlements.status === 'none') {
-      if (!['subscriptions', 'plans', 'organizations', 'account'].includes(prefix)) {
+      // The inbox stays reachable: a lapsed workspace is exactly the one that
+      // needs to read "your trial has ended".
+      if (!['subscriptions', 'plans', 'organizations', 'account', 'notifications'].includes(prefix)) {
         throw new ApiError(403, 'subscription_inactive', 'This workspace has no active subscription.', {
           upgrade_url: '/settings/billing',
         });
       }
     }
 
+    const installed = await authz.installed(orgId);
+    const activeApps = new Set([...entitlements.apps].filter((slug) => installed.has(slug)));
+    if (route.app && !activeApps.has(route.app)) {
+      throw new ApiError(403, 'app_not_installed', `Install ${route.app} before using it.`, { app: route.app });
+    }
+
     // Only permissions for entitled apps travel downstream — buying HR is what
     // makes HR permissions real, even if a role still lists them.
     const effective = [...authorization.permissions].filter((permission) => {
       const appSlug = permission.split('.')[0];
-      return ['core', 'billing', 'catalog'].includes(appSlug) || entitlements.apps.has(appSlug);
+      return ['core', 'billing', 'catalog'].includes(appSlug) || activeApps.has(appSlug);
     });
 
     // A write to billing or catalog changes the answer to gate 2 or 3. The bus
@@ -111,7 +119,7 @@ export async function proxyRoutes(app) {
     headers['x-nexus-member'] = authorization.memberId;
     headers['x-nexus-roles'] = authorization.roles.join(',');
     headers['x-nexus-perms'] = effective.join(',');
-    headers['x-nexus-apps'] = [...entitlements.apps].join(',');
+    headers['x-nexus-apps'] = [...activeApps].join(',');
 
     return reply.from(`${upstream}${target}`, {
       rewriteRequestHeaders: (req, original) => ({ ...stripInjected(original), ...headers }),

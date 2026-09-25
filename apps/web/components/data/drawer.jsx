@@ -11,15 +11,19 @@ import { Button } from '@/components/ui/button';
  * navigating away, so context is never lost mid-task — the interaction Odoo
  * and Zoho both rely on for detail views.
  */
-export function Drawer({ open, onClose, title, subtitle, badge, footer, width = 'md', children }) {
+export function Drawer({ open, onClose, title, subtitle, badge, footer, width = 'md', className, children }) {
   const panelRef = useRef(null);
+  const closeRef = useRef(onClose);
+  // Inline callbacks change on each keystroke. Keep the current callback without
+  // tearing down the focus trap and refocusing the panel on every render.
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     if (!open) return undefined;
 
     const previouslyFocused = document.activeElement;
     const onKey = (event) => {
-      if (event.key === 'Escape') onClose?.();
+      if (event.key === 'Escape') closeRef.current?.();
       if (event.key !== 'Tab') return;
 
       const focusables = panelRef.current?.querySelectorAll(
@@ -40,14 +44,18 @@ export function Drawer({ open, onClose, title, subtitle, badge, footer, width = 
     document.addEventListener('keydown', onKey);
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    requestAnimationFrame(() => panelRef.current?.focus());
+    const frame = requestAnimationFrame(() => {
+      const firstInput = panelRef.current?.querySelector('[data-autofocus], input:not([type="hidden"]):not([disabled]), textarea:not([disabled])');
+      (firstInput ?? panelRef.current)?.focus();
+    });
 
     return () => {
+      cancelAnimationFrame(frame);
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = overflow;
       previouslyFocused?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open || typeof document === 'undefined') return null;
 
@@ -72,6 +80,7 @@ export function Drawer({ open, onClose, title, subtitle, badge, footer, width = 
           'relative flex h-full w-full flex-col border-l border-[var(--border-subtle)]',
           'bg-[var(--surface-raised)] shadow-[var(--shadow-xl)] outline-none',
           widths[width],
+          className,
         )}
       >
         <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] px-5 py-4">

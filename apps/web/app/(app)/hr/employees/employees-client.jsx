@@ -1,4 +1,5 @@
 'use client';
+import { SourceTaskButton } from '@/components/tasks/source-task-button';
 
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -279,6 +280,7 @@ function EmployeeDrawer({ employeeId, onClose, onChanged }) {
             <div className="flex items-center gap-4">
               <Avatar name={employee.name} size="xl" />
               <div className="flex gap-2">
+<SourceTaskButton app="hr" type="employee" recordId={employee.id} title={`Onboarding: ${employee.name}`} />
                 {employee.email && (
                   <a href={`mailto:${employee.email}`}><Button variant="secondary" size="sm" icon={Mail}>Email</Button></a>
                 )}

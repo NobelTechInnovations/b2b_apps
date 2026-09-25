@@ -540,7 +540,7 @@ function RunDrawer({ runId, onClose, onChanged }) {
                               </div>
                             </TD>
                             <TD align="right" numeric>
-                              {payslip.payable_days}
+                              {Number(payslip.payable_days)}
                               {Number(payslip.lop_days) > 0 && (
                                 <span className="ml-1 text-xs text-[var(--color-critical-600)]">
                                   −{payslip.lop_days}

@@ -10,7 +10,7 @@ export const PLANS = [
     slug: 'starter',
     name: 'Starter',
     tagline: 'For small teams getting organised',
-    description: 'The workspace, five users and two apps of your choice.',
+    description: 'The workspace, five users and Projects & Tasks. Add other apps as needed.',
     base_price_monthly: 0,
     base_price_annual: 0,
     included_users: 5,
@@ -36,7 +36,7 @@ export const PLANS = [
     trial_days: 14,
     features: [
       '25 users included', '100 GB storage', 'Priority support',
-      'Custom roles & permissions', 'API access', 'Audit log',
+      'Custom roles & permissions', 'API access', 'Projects & Documents',
     ],
     included_apps: ['tasks', 'documents'],
     sort_order: 2,
@@ -55,10 +55,10 @@ export const PLANS = [
     trial_days: 14,
     features: [
       '100 users included', '1 TB storage', 'Dedicated success manager',
-      'SSO & SAML', 'Advanced audit & compliance', 'Custom automation',
-      'Sandbox workspace', '99.9% uptime SLA',
+      'Shared sign-in', 'Custom roles & permissions', 'API access',
+      'Projects & Documents',
     ],
-    included_apps: ['tasks', 'documents', 'knowledge', 'bi'],
+    included_apps: ['tasks', 'documents'],
     sort_order: 3,
   },
 ];

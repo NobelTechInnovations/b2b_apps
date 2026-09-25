@@ -6,6 +6,7 @@ import {
 import { EVENTS } from '@nexus/contracts/events';
 import { shiftForEmployee, periodSummary, ensureDefaultShift } from '../lib/shifts.js';
 import { balancesFor, checkLeaveRequest, applyApproval } from '../lib/leave.js';
+import { raiseRequest } from '../lib/attendance.js';
 import { formatMinutes } from '../lib/time.js';
 import { toISODate } from '../lib/setup.js';
 
@@ -189,6 +190,98 @@ export async function portalRoutes(app) {
           worked_hours: formatMinutes(summary?.work_minutes ?? 0),
         },
       };
+    },
+  );
+
+  // ═══════════════════════════════════════════════════ ATTENDANCE REQUESTS
+  /**
+   * "I forgot to punch out." The employee cannot write their own attendance —
+   * they raise a request, and somebody with approval rights decides it. Until
+   * then it is not in the table payroll reads.
+   */
+  app.get(
+    '/hr/me/attendance/requests',
+    { preHandler: [app.loadContext, requirePermission('hr.self.attendance')] },
+    async (request) => {
+      const { orgId } = request.ctx;
+      const employee = await me(db, request);
+
+      const rows = await db.rows(
+        `SELECT id, on_date, status, check_in_at, check_out_at, reason, via,
+                decision, decided_at, decision_note, created_at
+           FROM attendance_requests
+          WHERE org_id = $1 AND employee_id = $2
+          ORDER BY created_at DESC LIMIT 50`,
+        [orgId, employee.id],
+      );
+
+      return { data: rows };
+    },
+  );
+
+  app.post(
+    '/hr/me/attendance/requests',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.self.attendance')],
+      schema: {
+        body: body(
+          {
+            on_date: v.date,
+            status: v.enum(['present', 'half_day', 'remote']),
+            check_in_at: v.datetime,
+            check_out_at: v.datetime,
+            reason: v.text(500, 3),
+          },
+          ['on_date', 'reason'],
+        ),
+      },
+    },
+    async (request, reply) => {
+      const { orgId, userId } = request.ctx;
+      const employee = await me(db, request);
+      const b = request.body;
+
+      if (b.on_date > toISODate(new Date())) {
+        throw badRequest('You can only correct days that have already happened.');
+      }
+      if (!b.check_in_at && !b.check_out_at && !b.status) {
+        throw badRequest('Say what should change — a time, or how the day should be recorded.');
+      }
+
+      const created = await raiseRequest(db, {
+        orgId,
+        employeeId: employee.id,
+        onDate: b.on_date,
+        status: b.status,
+        checkIn: b.check_in_at,
+        checkOut: b.check_out_at,
+        reason: b.reason,
+        via: 'portal',
+        actorId: userId,
+      });
+
+      return reply.status(201).send({ data: created });
+    },
+  );
+
+  app.delete(
+    '/hr/me/attendance/requests/:requestId',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.self.attendance')],
+      schema: { params: params({ requestId: v.id('arq') }) },
+    },
+    async (request) => {
+      const { orgId } = request.ctx;
+      const employee = await me(db, request);
+
+      const row = await db.one(
+        `UPDATE attendance_requests SET decision = 'withdrawn'
+          WHERE id = $1 AND org_id = $2 AND employee_id = $3 AND decision = 'pending'
+          RETURNING id`,
+        [request.params.requestId, orgId, employee.id],
+      );
+      if (!row) throw notFound('A pending request');
+      return { data: { withdrawn: true } };
     },
   );
 

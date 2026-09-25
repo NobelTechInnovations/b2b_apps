@@ -1225,6 +1225,10 @@ export const APPS = [
   },
 ];
 
+// Release availability is explicit: catalogue descriptions are not shipped services.
+const RELEASED_APPS = new Set(['core', 'crm', 'hr', 'payroll', 'documents', 'invoicing', 'tasks']);
+for (const app of APPS) app.status = RELEASED_APPS.has(app.slug) ? 'available' : 'coming_soon';
+
 const BY_SLUG = new Map(APPS.map((a) => [a.slug, a]));
 const BY_CATEGORY = new Map(APP_CATEGORIES.map((c) => [c.slug, c]));
 

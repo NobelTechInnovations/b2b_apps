@@ -121,12 +121,12 @@ export function Sidebar({ collapsed, onToggle }) {
                         className={cn(
                           'relative flex items-center gap-2 rounded-[var(--radius-sm)] py-1.5 pl-4 pr-2',
                           'text-sm transition-colors duration-100',
-                          isActive(item.path)
+                          (isActive(item.path) && !app.items.some((other) => other.path !== item.path && other.path.startsWith(`${item.path}/`) && isActive(other.path)))
                             ? 'bg-[var(--surface-active)] font-medium text-[var(--text-primary)]'
                             : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
                         )}
                       >
-                        {isActive(item.path) && (
+                        {(isActive(item.path) && !app.items.some((other) => other.path !== item.path && other.path.startsWith(`${item.path}/`) && isActive(other.path))) && (
                           <span className="absolute -left-px top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-[var(--color-brand-500)]" />
                         )}
                         <span className="truncate">{item.label}</span>

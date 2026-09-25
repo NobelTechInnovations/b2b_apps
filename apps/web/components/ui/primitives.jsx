@@ -92,7 +92,7 @@ export function Avatar({ name, src, size = 'md', className, square }) {
 
   if (src) {
     return (
-      // eslint-disable-next-line @next/next/no-img-element
+
       <img
         src={src}
         alt={name ?? ''}

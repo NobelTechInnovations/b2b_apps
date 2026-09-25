@@ -7,7 +7,7 @@ import { forbidden } from '@nexus/service-kit';
  * or role grants invalidates every cached decision for that workspace the
  * moment the new epoch reaches a token — no cache stampede, no stale access.
  */
-export function createAuthz({ tenancyUrl, billingUrl, serviceToken, logger, ttlMs = 30_000 }) {
+export function createAuthz({ tenancyUrl, billingUrl, catalogUrl, serviceToken, logger, ttlMs = 30_000 }) {
   const permissionCache = new Map();
   const entitlementCache = new Map();
 
@@ -33,6 +33,11 @@ export function createAuthz({ tenancyUrl, billingUrl, serviceToken, logger, ttlM
   }
 
   return {
+    async installed(orgId) {
+      const data = await fetchJson(`${catalogUrl}/internal/orgs/${orgId}/apps`, 'catalog');
+      return new Set((data ?? []).map((row) => row.app_slug));
+    },
+
     /** Who is this person in this workspace, and what may they do? */
     async permissions({ orgId, userId, epoch }) {
       const key = `${orgId}:${userId}:${epoch}`;

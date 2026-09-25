@@ -1,4 +1,5 @@
 'use client';
+import { SourceTaskButton } from '@/components/tasks/source-task-button';
 
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -302,6 +303,7 @@ function LeadDrawer({ lead, onClose, onConvert, onChanged }) {
         <div className="flex items-center gap-4">
           <Avatar name={record.name} size="xl" />
           <div className="flex gap-2">
+<SourceTaskButton app="crm" type="lead" recordId={record.id} title={`Follow up: ${record.name}`} />
             {record.email && (
               <a href={`mailto:${record.email}`}>
                 <Button variant="secondary" size="sm" icon={Mail}>Email</Button>

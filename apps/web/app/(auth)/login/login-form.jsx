@@ -37,7 +37,7 @@ export default function LoginForm() {
         router.push('/onboarding');
         return;
       }
-      router.push(next && next.startsWith('/') ? next : '/dashboard');
+      router.push(next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '/dashboard');
       router.refresh();
     } catch (error) {
       if (error instanceof ApiError) {

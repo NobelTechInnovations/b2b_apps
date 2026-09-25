@@ -1,5 +1,5 @@
 import { id } from '@nexus/db-kit';
-import { body, validate as v, notFound, badRequest, forbidden } from '@nexus/service-kit';
+import { requirePermission, body, validate as v, notFound, badRequest, forbidden } from '@nexus/service-kit';
 import { appBySlug, resolveDependencies } from '@nexus/contracts';
 import { EVENTS } from '@nexus/contracts/events';
 import { quote, periodEnd } from '../lib/pricing.js';
@@ -25,6 +25,7 @@ export async function subscriptionRoutes(app) {
       const price = byslug.get(slug);
       const definition = appBySlug(slug);
       if (!price || !definition) throw badRequest(`Unknown app: ${slug}`);
+      if (definition.status === 'coming_soon') throw badRequest(`${definition.name} is not available yet.`);
       return {
         slug,
         name: definition.name,
@@ -110,7 +111,7 @@ export async function subscriptionRoutes(app) {
   app.post(
     '/subscriptions',
     {
-      preHandler: app.authenticateOrg,
+      preHandler: [app.loadContext, requirePermission('billing.subscription.manage')],
       schema: {
         body: body(
           {
@@ -211,7 +212,7 @@ export async function subscriptionRoutes(app) {
   );
 
   // ══════════════════════════════════════════════════════════════════ CURRENT
-  app.get('/subscriptions/current', { preHandler: app.authenticateOrg }, async (request) => {
+  app.get('/subscriptions/current', { preHandler: [app.loadContext, requirePermission('billing.subscription.view')] }, async (request) => {
     const orgId = request.auth.orgId;
 
     const subscription = await db.one(
@@ -268,7 +269,7 @@ export async function subscriptionRoutes(app) {
   app.post(
     '/subscriptions/current/apps',
     {
-      preHandler: app.authenticateOrg,
+      preHandler: [app.loadContext, requirePermission('billing.subscription.manage')],
       schema: { body: body({ app_slug: v.slug }, ['app_slug']) },
     },
     async (request) => {
@@ -348,7 +349,7 @@ export async function subscriptionRoutes(app) {
   app.delete(
     '/subscriptions/current/apps/:slug',
     {
-      preHandler: app.authenticateOrg,
+      preHandler: [app.loadContext, requirePermission('billing.subscription.manage')],
       schema: { params: { type: 'object', properties: { slug: v.slug }, required: ['slug'] } },
     },
     async (request) => {
@@ -409,7 +410,7 @@ export async function subscriptionRoutes(app) {
   app.patch(
     '/subscriptions/current',
     {
-      preHandler: app.authenticateOrg,
+      preHandler: [app.loadContext, requirePermission('billing.subscription.manage')],
       schema: {
         body: body({
           plan: v.slug,
@@ -438,6 +439,10 @@ export async function subscriptionRoutes(app) {
         throw badRequest(`The ${plan.name} plan supports up to ${plan.max_users} users.`);
       }
 
+      const currentItems = await db.rows(
+        `SELECT app_slug FROM subscription_items WHERE subscription_id = $1 AND removed_at IS NULL`, [subscription.id]);
+      const pricing = await loadPricing(nextPlanSlug, currentItems.map((item) => item.app_slug));
+      const nextCycle = request.body.cycle ?? subscription.billing_cycle;
       const updated = await db.transaction(async (tx) => {
         const row = await tx.one(
           `UPDATE subscriptions
@@ -451,12 +456,14 @@ export async function subscriptionRoutes(app) {
           ],
         );
 
-        // Per-user lines follow the seat count.
-        await tx.query(
-          `UPDATE subscription_items SET quantity = $2
-            WHERE subscription_id = $1 AND billing_unit = 'user' AND removed_at IS NULL`,
-          [subscription.id, seats],
-        );
+        for (const item of pricing.apps) {
+          await tx.query(
+            `UPDATE subscription_items SET quantity = $3, unit_price = $4, source = $5
+             WHERE subscription_id = $1 AND app_slug = $2 AND removed_at IS NULL`,
+            [subscription.id, item.slug, item.billing_unit === 'user' ? seats : 1,
+              pricing.included.has(item.slug) ? 0 : nextCycle === 'annual' ? item.price_annual : item.price_monthly,
+              pricing.included.has(item.slug) ? 'plan' : 'addon']);
+        }
 
         await recomputeEntitlements(tx, orgId, { actorId });
 
@@ -483,7 +490,7 @@ export async function subscriptionRoutes(app) {
   app.post(
     '/subscriptions/current/cancel',
     {
-      preHandler: app.authenticateOrg,
+      preHandler: [app.loadContext, requirePermission('billing.subscription.manage')],
       schema: { body: body({ reason: v.text(500), immediate: { type: 'boolean', default: false } }) },
     },
     async (request) => {

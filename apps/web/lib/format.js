@@ -2,12 +2,15 @@ const CURRENCY_LOCALE = { INR: 'en-IN', USD: 'en-US', EUR: 'de-DE', GBP: 'en-GB'
 
 export function money(amount, currency = 'INR', { compact = false, decimals } = {}) {
   const value = Number(amount ?? 0);
+  // Whole amounts drop the paise; anything with paise shows both digits.
+  // "₹550.5" reads as a typo on a payslip — money is always "₹550.50".
+  const fractional = !compact && value % 1 !== 0;
   return new Intl.NumberFormat(CURRENCY_LOCALE[currency] ?? 'en-IN', {
     style: 'currency',
     currency,
     notation: compact ? 'compact' : 'standard',
-    maximumFractionDigits: decimals ?? (compact ? 1 : value % 1 === 0 ? 0 : 2),
-    minimumFractionDigits: decimals ?? 0,
+    maximumFractionDigits: decimals ?? (compact ? 1 : fractional ? 2 : 0),
+    minimumFractionDigits: decimals ?? (fractional ? 2 : 0),
   }).format(value);
 }
 
@@ -32,13 +35,16 @@ export function date(value, style = 'medium') {
 export function relativeTime(value) {
   if (!value) return '—';
   const diff = Date.now() - new Date(value).getTime();
+  // Below each limit, count in that unit: under an hour in minutes, under a
+  // day in hours, and so on. (Each unit used to be paired with the divisor of
+  // the one below it, so five minutes read as "5 hours ago".)
   const units = [
-    [60_000, 'minute', 1_000],
-    [3_600_000, 'hour', 60_000],
-    [86_400_000, 'day', 3_600_000],
-    [604_800_000, 'week', 86_400_000],
-    [2_592_000_000, 'month', 604_800_000],
-    [Infinity, 'year', 2_592_000_000],
+    [3_600_000, 'minute', 60_000],
+    [86_400_000, 'hour', 3_600_000],
+    [604_800_000, 'day', 86_400_000],
+    [2_592_000_000, 'week', 604_800_000],
+    [31_536_000_000, 'month', 2_592_000_000],
+    [Infinity, 'year', 31_536_000_000],
   ];
 
   if (Math.abs(diff) < 45_000) return 'just now';

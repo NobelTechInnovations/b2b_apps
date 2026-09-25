@@ -18,6 +18,7 @@ app.decorate('upstreams', resolveUpstreams());
 const authz = createAuthz({
   tenancyUrl: config.tenancyUrl,
   billingUrl: config.billingUrl,
+  catalogUrl: config.catalogUrl,
   serviceToken: config.serviceToken,
   logger: app.log,
 });
@@ -78,6 +79,6 @@ if (bus) {
   }
 }
 
-app.get('/internal/cache-stats', { logLevel: 'silent' }, async () => authz.stats());
+app.get('/internal/cache-stats', { logLevel: 'silent', preHandler: app.verifyInternal }, async () => authz.stats());
 
 await startService(app, { port: config.port, name: NAME });

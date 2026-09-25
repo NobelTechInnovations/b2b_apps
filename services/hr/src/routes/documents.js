@@ -1,4 +1,5 @@
 import { id, paginate } from '@nexus/db-kit';
+import { EVENTS } from '@nexus/contracts/events';
 import {
   requirePermission, body, params, query, validate as v, notFound, badRequest, conflict,
 } from '@nexus/service-kit';
@@ -348,7 +349,7 @@ export async function employeeDocumentRoutes(app) {
         // should not consume a reference.
         const reference = issue ? await nextLetterReference(tx, orgId, kind) : null;
 
-        return tx.one(
+        const inserted = await tx.one(
           `INSERT INTO employee_documents
              (id, org_id, employee_id, template_id, kind, title, reference, body,
               document_id, file_name, status, visible_to_employee,
@@ -367,6 +368,9 @@ export async function employeeDocumentRoutes(app) {
             b.notes ?? null,
           ],
         );
+
+        await announceIssued(tx, { orgId, actorId: userId, document: inserted });
+        return inserted;
       });
 
       return reply.status(201).send({ data: row });
@@ -396,13 +400,15 @@ export async function employeeDocumentRoutes(app) {
 
       const updated = await db.transaction(async (tx) => {
         const reference = await nextLetterReference(tx, orgId, document.kind);
-        return tx.one(
+        const issued = await tx.one(
           `UPDATE employee_documents
               SET status = 'issued', reference = $3,
                   issued_on = COALESCE($4::date, current_date), issued_by = $5
             WHERE id = $1 AND org_id = $2 RETURNING *`,
           [document.id, orgId, reference, request.body.issued_on ?? null, userId],
         );
+        await announceIssued(tx, { orgId, actorId: userId, document: issued });
+        return issued;
       });
 
       return { data: updated };
@@ -533,5 +539,28 @@ async function buildContext(db, { orgId, employeeId, issuedBy, validUntil, works
     salary,
     issuedBy,
     validUntil,
+  });
+}
+
+/** Tell the employee — only if the document is theirs to see. */
+async function announceIssued(tx, { orgId, actorId, document }) {
+  if (!document?.visible_to_employee || document.status !== 'issued') return;
+  const employee = await tx.one(
+    `SELECT user_id, first_name, last_name FROM employees WHERE id = $1`,
+    [document.employee_id],
+  );
+  tx.emit({
+    type: EVENTS.DOCUMENT_ISSUED,
+    org_id: orgId,
+    actor_id: actorId,
+    data: {
+      document_id: document.id,
+      employee_id: document.employee_id,
+      employee_user_id: employee?.user_id ?? null,
+      employee_name: [employee?.first_name, employee?.last_name].filter(Boolean).join(' '),
+      title: document.title,
+      reference: document.reference,
+      requires_acknowledgement: document.requires_acknowledgement,
+    },
   });
 }

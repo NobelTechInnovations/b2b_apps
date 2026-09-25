@@ -540,7 +540,149 @@ async function main() {
     (leakAccess.body?.data?.length ?? -1) === 0, `${leakAccess.body?.data?.length}`);
 
   // ── 11 ── revoking access ───────────────────────────────────────────────
-  step(11, 'Revoking access');
+  // ── 11 ── manual attendance needs an approver ──────────────────────────
+  step(11, 'Manual attendance needs approval');
+  const clerk = session();
+
+  // An HR clerk: the ordinary `member` role, which can edit but not approve.
+  const roleList = await hr('/roles');
+  const memberRole = roleList.body?.data?.find((r) => r.slug === 'member');
+  const clerkEmail = `clerk+${stamp}@nexus.test`;
+  const clerkInvite = await hr('/invitations', {
+    method: 'POST', body: { email: clerkEmail, role_ids: [memberRole.id] },
+  });
+  const clerkToken = new URL(clerkInvite.body.data.invite_link).searchParams.get('token');
+  await clerk('/auth/register', {
+    method: 'POST',
+    body: { email: clerkEmail, password: 'correct-horse-battery-7', name: 'HR Clerk', invitation_token: clerkToken },
+  });
+  await clerk('/invitations/accept', { method: 'POST', body: { token: clerkToken } });
+  await clerk('/auth/refresh', { method: 'POST', body: {} });
+  await settle(1200);
+
+  const day = (() => {
+    const d = new Date(); d.setDate(d.getDate() - 3);
+    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  const at = (hh, mm) => { const d = new Date(`${day}T00:00:00`); d.setHours(hh, mm, 0, 0); return d.toISOString(); };
+
+  const clerkMark = await clerk('/hr/attendance', {
+    method: 'POST',
+    body: {
+      employee_id: theirsId, on_date: day, status: 'present',
+      check_in_at: at(9, 0), check_out_at: at(18, 30), notes: 'Biometric was down',
+    },
+  });
+  check('a clerk’s manual mark becomes a request, not attendance',
+    clerkMark.status === 202 && clerkMark.body?.data?.pending === true,
+    `status ${clerkMark.status} ${JSON.stringify(clerkMark.body?.error ?? '').slice(0, 120)}`);
+
+  const notYet = await hr(`/hr/attendance?employee_id=${theirsId}&from=${day}&to=${day}`);
+  check('until approved, it is not in the attendance payroll reads',
+    (notYet.body?.data?.length ?? -1) === 0, `${notYet.body?.data?.length} rows`);
+
+  const clerkCheckIn = await clerk('/hr/attendance/check-in', {
+    method: 'POST', body: { employee_id: theirsId, remote: true },
+  });
+  const clerkCheckOut = await clerk('/hr/attendance/check-out', {
+    method: 'POST', body: { employee_id: theirsId },
+  });
+  check('the check-in and check-out buttons need approval too',
+    clerkCheckIn.status === 202 && clerkCheckOut.status === 202,
+    `${clerkCheckIn.status} / ${clerkCheckOut.status}`);
+  check('check-out completes the same claim rather than filing a second one',
+    clerkCheckOut.body?.data?.request?.id === clerkCheckIn.body?.data?.request?.id);
+  check('and does not turn a remote check-in back into present',
+    clerkCheckOut.body?.data?.request?.status === 'remote', clerkCheckOut.body?.data?.request?.status);
+
+  const clerkApprove = await clerk(`/hr/attendance/requests/${clerkMark.body.data.request.id}/decide`, {
+    method: 'POST', body: { decision: 'approved' },
+  });
+  check('a clerk cannot approve', clerkApprove.status === 403, `status ${clerkApprove.status}`);
+
+  const queue = await hr('/hr/attendance/requests');
+  check('the approver sees both claims waiting',
+    queue.body?.meta?.pending >= 2, `${queue.body?.meta?.pending} pending`);
+
+  const bareReject = await hr(`/hr/attendance/requests/${clerkCheckIn.body.data.request.id}/decide`, {
+    method: 'POST', body: { decision: 'rejected' },
+  });
+  check('a rejection must say why', bareReject.status === 400, `status ${bareReject.status}`);
+
+  const rejected = await hr(`/hr/attendance/requests/${clerkCheckIn.body.data.request.id}/decide`, {
+    method: 'POST', body: { decision: 'rejected', note: 'Priya was on leave-without-pay today.' },
+  });
+  check('an approver can reject', rejected.body?.data?.request?.decision === 'rejected',
+    JSON.stringify(rejected.body?.error ?? '').slice(0, 120));
+
+  const approved = await hr(`/hr/attendance/requests/${clerkMark.body.data.request.id}/decide`, {
+    method: 'POST', body: { decision: 'approved', note: 'Confirmed with the shift lead.' },
+  });
+  check('an approver can approve', approved.body?.data?.request?.decision === 'approved',
+    JSON.stringify(approved.body?.error ?? '').slice(0, 120));
+
+  const nowThere = await hr(`/hr/attendance?employee_id=${theirsId}&from=${day}&to=${day}`);
+  const approvedDay = nowThere.body?.data?.[0];
+  check('once approved, the day is in attendance', approvedDay?.status === 'present');
+  check('with its hours derived like any other day',
+    approvedDay?.work_minutes === 510, `${approvedDay?.work_minutes} minutes`);
+  check('and it records who approved it', Boolean(approvedDay?.approved_by));
+
+  const redecide = await hr(`/hr/attendance/requests/${clerkMark.body.data.request.id}/decide`, {
+    method: 'POST', body: { decision: 'rejected', note: 'changed my mind' },
+  });
+  check('a decided request cannot be decided again', redecide.status === 400, `status ${redecide.status}`);
+
+  // A terminal that syncs late must not undo a decision an approver made.
+  const gate = await hr('/hr/devices', { method: 'POST', body: { name: `Gate ${stamp}` } });
+  const latePunch = await fetch(`${GATEWAY}/api/device-sync/punches`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-device-key': gate.body.data.api_key },
+    body: JSON.stringify({ punches: [
+      { employee_ref: theirs.body.data.employee_code, punched_at: at(11, 0), direction: 'in' },
+      { employee_ref: theirs.body.data.employee_code, punched_at: at(13, 0), direction: 'out' },
+    ] }),
+  }).then((r) => r.json());
+  check('the late punches are accepted and kept', latePunch.data?.accepted === 2,
+    JSON.stringify(latePunch.data ?? latePunch.error));
+  const afterSync = await hr(`/hr/attendance?employee_id=${theirsId}&from=${day}&to=${day}`);
+  check('but the approved day keeps the approver’s hours',
+    afterSync.body?.data?.[0]?.work_minutes === 510 && afterSync.body?.data?.[0]?.source === 'manual',
+    JSON.stringify({ m: afterSync.body?.data?.[0]?.work_minutes, s: afterSync.body?.data?.[0]?.source }));
+
+  // The employee regularises their own day from the portal.
+  const selfClaim = await portal('/hr/me/attendance/requests', {
+    method: 'POST',
+    body: { on_date: day, status: 'present', check_in_at: at(9, 10), check_out_at: at(18, 0), reason: 'Forgot to punch' },
+  });
+  check('an employee can ask for a correction', selfClaim.status === 201,
+    JSON.stringify(selfClaim.body?.error ?? '').slice(0, 120));
+
+  const future = await portal('/hr/me/attendance/requests', {
+    method: 'POST',
+    body: { on_date: weekday(5), status: 'present', reason: 'Pre-marking' },
+  });
+  check('but not for a day that has not happened', future.status === 400, `status ${future.status}`);
+
+  const selfDecide = await portal(`/hr/attendance/requests/${selfClaim.body.data.id}/decide`, {
+    method: 'POST', body: { decision: 'approved' },
+  });
+  check('and cannot approve it', selfDecide.status === 403, `status ${selfDecide.status}`);
+
+  // Whoever raised a claim cannot be the one who settles it.
+  const clerkOwnDay = await clerk('/hr/attendance', {
+    method: 'POST',
+    body: { employee_id: mineId, on_date: day, status: 'half_day', notes: 'Left early' },
+  });
+  const selfApprovalAttempt = await clerk(
+    `/hr/attendance/requests/${clerkOwnDay.body.data.request.id}/decide`,
+    { method: 'POST', body: { decision: 'approved' } },
+  );
+  check('nobody approves a claim they raised themselves',
+    selfApprovalAttempt.status === 403, `status ${selfApprovalAttempt.status}`);
+
+  step(12, 'Revoking access');
   const revoked = await hr('/hr/portal/revoke', { method: 'POST', body: { employee_id: mineId } });
   check('access revoked', revoked.status === 200, `status ${revoked.status}`);
 

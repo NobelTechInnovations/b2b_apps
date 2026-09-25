@@ -1,6 +1,6 @@
 import { id, paginate } from '@nexus/db-kit';
 import {
-  requirePermission, body, query, params, validate as v, notFound, badRequest, conflict,
+  requirePermission, body, query, params, validate as v, notFound, badRequest, conflict, forbidden,
 } from '@nexus/service-kit';
 import { EVENTS } from '@nexus/contracts/events';
 import { ensureLeaveTypes, workingDays } from '../lib/setup.js';
@@ -229,7 +229,7 @@ export async function leaveRoutes(app) {
 
       const leaveRequest = await db.one(
         `SELECT lr.*, lt.name AS leave_type_name, lt.is_paid,
-                e.first_name, e.last_name
+                e.first_name, e.last_name, e.user_id AS employee_user_id
            FROM leave_requests lr
            JOIN leave_types lt ON lt.id = lr.leave_type_id
            JOIN employees e ON e.id = lr.employee_id
@@ -239,6 +239,12 @@ export async function leaveRoutes(app) {
       if (!leaveRequest) throw notFound('Leave request');
       if (leaveRequest.status !== 'pending') {
         throw badRequest(`This request has already been ${leaveRequest.status}.`);
+      }
+      // Nobody decides their own leave. Recording someone else's leave and
+      // approving it is ordinary HR work, so it is the *subject* of the
+      // request that matters here, not who typed it in.
+      if (leaveRequest.employee_user_id === userId) {
+        throw forbidden('You cannot decide your own leave. Ask another approver.', { code: 'self_approval' });
       }
 
       const approved = request.body.decision === 'approved';
@@ -259,20 +265,26 @@ export async function leaveRoutes(app) {
             userId,
           });
 
-          tx.emit({
-            type: EVENTS.LEAVE_APPROVED,
-            org_id: orgId,
-            actor_id: userId,
-            data: {
-              leave_request_id: row.id,
-              employee_id: row.employee_id,
-              employee_name: [leaveRequest.first_name, leaveRequest.last_name].filter(Boolean).join(' '),
-              start_date: row.start_date,
-              end_date: row.end_date,
-              days: row.days,
-            },
-          });
         }
+
+        // Both outcomes are news to the person who asked.
+        tx.emit({
+          type: approved ? EVENTS.LEAVE_APPROVED : EVENTS.LEAVE_REJECTED,
+          org_id: orgId,
+          actor_id: userId,
+          data: {
+            leave_request_id: row.id,
+            employee_id: row.employee_id,
+            employee_user_id: leaveRequest.employee_user_id,
+            requested_by: leaveRequest.requested_by,
+            employee_name: [leaveRequest.first_name, leaveRequest.last_name].filter(Boolean).join(' '),
+            leave_type: leaveRequest.leave_type_name,
+            start_date: row.start_date,
+            end_date: row.end_date,
+            days: row.days,
+            note: row.decision_note,
+          },
+        });
 
         return row;
       });

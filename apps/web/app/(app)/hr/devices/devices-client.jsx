@@ -440,7 +440,14 @@ function KeyReveal({ reveal, endpoint, onClose }) {
           </div>
         </Field>
 
-        <Divider label="Sending a punch" />
+        <Alert tone="info" title="Most terminals need the device bridge">
+          eSSL, ZKTeco and similar machines export punches as a file rather than calling a web
+          address. Run <code className="font-mono">tools/device-bridge/bridge.js</code> with this
+          endpoint and key — on the USB export, or watching the folder your terminal software
+          exports to. Setup steps are in <code className="font-mono">docs/DEVICE_SETUP.md</code>.
+        </Alert>
+
+        <Divider label="Or post punches directly" />
 
         <div className="relative">
           <pre className="max-h-48 overflow-auto rounded-[var(--radius-lg)] bg-[var(--surface-sunken)] p-3 font-mono text-2xs leading-relaxed text-[var(--text-secondary)]">

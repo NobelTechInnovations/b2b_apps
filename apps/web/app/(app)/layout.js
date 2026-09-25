@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { headers } from 'next/headers';
 import { serverApi } from '@/lib/server-api';
 import { AppShell } from '@/components/shell/app-shell';
 
@@ -13,7 +14,10 @@ export default async function AppLayout({ children }) {
     serverApi('/auth/me'),
   ]);
 
-  if (workspace.status === 401 || me.status === 401) redirect('/login');
+  if (workspace.status === 401 || me.status === 401) {
+    const next = (await headers()).get('x-nexus-page') ?? '/dashboard';
+    redirect(`/session-refresh?next=${encodeURIComponent(next)}`);
+  }
 
   if (workspace.error && workspace.status === 503) {
     return (

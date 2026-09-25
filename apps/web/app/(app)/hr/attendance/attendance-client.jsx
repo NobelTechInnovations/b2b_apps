@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/toast';
 import { Button } from '@/components/ui/button';
 import { Input, Select } from '@/components/ui/input';
 import { StatTile } from '@/components/data/stat-tile';
+import { AttendanceApprovals } from '@/components/hr/attendance-approvals';
 import { Avatar, Badge, Card, EmptyState, PageHeader, Alert, Skeleton } from '@/components/ui/primitives';
 
 const STATUS = {
@@ -40,6 +41,7 @@ export default function AttendanceClient() {
   const [onDate, setOnDate] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [busyId, setBusyId] = useState(null);
+  const [queueKey, setQueueKey] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -68,7 +70,13 @@ export default function AttendanceClient() {
   async function mark(employeeId, status) {
     setBusyId(employeeId);
     try {
-      await api.post('/hr/attendance', { employee_id: employeeId, status, on_date: onDate || undefined });
+      const response = await api.post('/hr/attendance', { employee_id: employeeId, status, on_date: onDate || undefined });
+      if (response?.data?.pending) {
+        toast.success('Sent for approval', {
+          description: 'Manual entries count once an approver accepts them.',
+        });
+        setQueueKey((k) => k + 1);
+      }
       await load();
     } catch (err) {
       toast.error('Could not save that', {
@@ -82,8 +90,15 @@ export default function AttendanceClient() {
   async function punch(employeeId, direction) {
     setBusyId(employeeId);
     try {
-      await api.post(`/hr/attendance/check-${direction}`, { employee_id: employeeId });
-      toast.success(direction === 'in' ? 'Checked in' : 'Checked out');
+      const response = await api.post(`/hr/attendance/check-${direction}`, { employee_id: employeeId });
+      if (response?.data?.pending) {
+        toast.success(`Check-${direction} sent for approval`, {
+          description: 'It counts once an approver accepts it.',
+        });
+        setQueueKey((k) => k + 1);
+      } else {
+        toast.success(direction === 'in' ? 'Checked in' : 'Checked out');
+      }
       await load();
     } catch (err) {
       toast.error(`Could not check ${direction}`, {
@@ -124,6 +139,8 @@ export default function AttendanceClient() {
           </div>
         }
       />
+
+      <AttendanceApprovals refreshKey={queueKey} onChanged={load} />
 
       {counts && (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">

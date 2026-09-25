@@ -4,13 +4,13 @@ import { unauthorized, forbidden } from './errors.js';
 
 /**
  * Verifies the platform access token locally against the identity service's
- * published JWKS. No service calls identity on the hot path, so single sign-on
- * stays fast no matter how many services a page touches.
+ * published JWKS, then checks the live session so logout/revocation takes
+ * effect immediately. Identity availability is required for authenticated traffic.
  *
  * Decorates every request with:
  *   request.auth = { userId, email, orgId, memberId, roles, sessionId, epoch }
  */
-export function authPlugin({ jwksUrl, issuer, audience = 'nexus', serviceToken }) {
+export function authPlugin({ jwksUrl, issuer, audience = 'nexus', serviceToken, sessionDb }) {
   const jwks = createRemoteJWKSet(new URL(jwksUrl), {
     cooldownDuration: 30_000,
     cacheMaxAge: 600_000,
@@ -39,6 +39,30 @@ export function authPlugin({ jwksUrl, issuer, audience = 'nexus', serviceToken }
       if (!token) throw unauthorized();
 
       const claims = await verifyToken(token);
+      // Check the session on every authenticated request: clearing browser cookies
+      // alone does not revoke a copied JWT. Identity failure must fail closed.
+      let active;
+      if (!claims.sid || !claims.sub) throw unauthorized();
+      if (sessionDb) {
+        active = await sessionDb.one(
+          `SELECT s.id FROM sessions s JOIN users u ON u.id = s.user_id
+           WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
+             AND s.expires_at > now() AND u.status = 'active'`, [claims.sid, claims.sub]);
+      } else {
+        const endpoint = new URL(`/internal/sessions/${encodeURIComponent(claims.sid)}`, jwksUrl);
+        endpoint.searchParams.set('user_id', claims.sub);
+        try {
+          const response = await fetch(endpoint, {
+            headers: { 'x-nexus-service-token': serviceToken }, signal: AbortSignal.timeout(3000),
+          });
+          if (!response.ok) throw new Error(`Session lookup returned ${response.status}`);
+          active = (await response.json()).data?.active;
+        } catch (error) {
+          request.log.warn({ err: error }, 'session verification unavailable');
+          throw app.httpErrors.serviceUnavailable('Session verification is unavailable.');
+        }
+      }
+      if (!active) throw unauthorized('Your session has ended. Please sign in again.');
       request.auth = {
         userId: claims.sub,
         email: claims.email,

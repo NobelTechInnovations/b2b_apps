@@ -52,6 +52,12 @@ export const EVENTS = {
   EMPLOYEE_OFFBOARDED: 'hr.employee.offboarded',
   LEAVE_REQUESTED: 'hr.leave.requested',
   LEAVE_APPROVED: 'hr.leave.approved',
+  LEAVE_REJECTED: 'hr.leave.rejected',
+  ATTENDANCE_REQUESTED: 'hr.attendance.requested',
+  ATTENDANCE_DECIDED: 'hr.attendance.decided',
+  DOCUMENT_ISSUED: 'hr.document.issued',
+  REVIEW_OPENED: 'hr.review.opened',
+  REVIEW_SHARED: 'hr.review.shared',
 
   // ── payroll ─────────────────────────────────────────────────────────────
   PAYROLL_PROCESSED: 'payroll.run.processed',

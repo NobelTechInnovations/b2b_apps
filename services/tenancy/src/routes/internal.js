@@ -111,6 +111,33 @@ export async function internalRoutes(app) {
   });
 
   /**
+   * Everybody in a workspace who holds a permission.
+   *
+   * The notifier asks this to route "someone needs approving" to exactly the
+   * people who can approve — resolved through the same function the gateway
+   * uses, so a notification can never reach someone who could not act on it.
+   */
+  app.get(
+    '/internal/orgs/:orgId/members-with/:permission',
+    { preHandler: requireInternal() },
+    async (request) => {
+      const { orgId, permission } = request.params;
+      const members = await db.rows(
+        `SELECT id, user_id FROM members WHERE org_id = $1 AND status = 'active'`,
+        [orgId],
+      );
+
+      const holders = [];
+      for (const member of members) {
+        const resolved = await resolveMemberPermissions(db, { orgId, memberId: member.id });
+        if (resolved.isOwner || resolved.permissions.has(permission)) holders.push(member.user_id);
+      }
+
+      return { data: holders };
+    },
+  );
+
+  /**
    * The workspace's roles, so another service can find the one it needs by
    * slug. HR uses this to attach the `employee` role to a portal invitation.
    */
