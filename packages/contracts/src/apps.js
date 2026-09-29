@@ -121,12 +121,17 @@ export const APP_CATEGORIES = [
 
 const INR = 'INR';
 
-/** Terse helper so 40 app entries stay readable. */
-const price = (monthly, per = 'user') => ({
-  monthly,
-  annual: monthly * 10,
+/**
+ * Apps are not sold one by one. A plan includes any five of them, and each app
+ * beyond that is a flat add-on whose price lives with the plan in billing. So
+ * every app's own price is zero; the argument each entry passes is kept only
+ * as a note of its old list price.
+ */
+const price = (_listPrice) => ({
+  monthly: 0,
+  annual: 0,
   currency: INR,
-  per,
+  per: 'org',
 });
 
 export const APPS = [
@@ -870,27 +875,29 @@ export const APPS = [
   // ═══════════════════════════════════════════════════════════════ PROJECTS
   {
     slug: 'tasks',
-    name: 'Projects & Tasks',
-    tagline: 'Everything the team is working on',
+    name: 'Tasks & Boards',
+    tagline: 'To-dos, boards and projects for every team',
     description:
-      'Projects, tasks, subtasks, kanban boards, milestones and time tracking — with tasks that can be raised from any other app.',
+      'Boards for every team or client — private to the people you add, or open to everyone. To-dos, subtasks, kanban, milestones and time tracking, with tasks that can be raised from any other app.',
     category: 'projects',
     icon: 'ListChecks',
     color: 'violet',
     service: 'tasks',
     price: price(399),
     flagship: true,
-    highlights: ['Kanban & list views', 'Time tracking', 'Milestones', 'Cross-app tasks'],
-    features: ['tasks.projects', 'tasks.tasks', 'tasks.kanban', 'tasks.timetracking', 'tasks.milestones'],
+    highlights: ['Private boards per person or team', 'Kanban & table views', 'Time tracking', 'Cross-app tasks'],
+    features: ['tasks.projects', 'tasks.tasks', 'tasks.kanban', 'tasks.timetracking', 'tasks.milestones', 'tasks.boards'],
     permissions: [
       'tasks.projects.view', 'tasks.projects.create', 'tasks.projects.edit', 'tasks.projects.delete',
+      // See and manage every board, including private ones. Owners and admins.
+      'tasks.boards.manage',
       'tasks.tasks.view', 'tasks.tasks.create', 'tasks.tasks.edit', 'tasks.tasks.delete', 'tasks.tasks.assign',
       'tasks.time.view', 'tasks.time.log',
     ],
     nav: [
       { label: 'My work', path: '/tasks', icon: 'CircleDot', permission: 'tasks.tasks.view' },
-      { label: 'Projects', path: '/tasks/projects', icon: 'FolderKanban', permission: 'tasks.projects.view' },
-      { label: 'Board', path: '/tasks/board', icon: 'Kanban', permission: 'tasks.tasks.view' },
+      { label: 'Boards', path: '/tasks/projects', icon: 'FolderKanban', permission: 'tasks.projects.view' },
+      { label: 'Kanban', path: '/tasks/board', icon: 'Kanban', permission: 'tasks.tasks.view' },
       { label: 'Calendar', path: '/tasks/calendar', icon: 'CalendarDays', permission: 'tasks.tasks.view' },
       { label: 'Timesheets', path: '/tasks/time', icon: 'Timer', permission: 'tasks.time.view' },
     ],
@@ -1229,6 +1236,25 @@ export const APPS = [
 const RELEASED_APPS = new Set(['core', 'crm', 'hr', 'payroll', 'documents', 'invoicing', 'tasks']);
 for (const app of APPS) app.status = RELEASED_APPS.has(app.slug) ? 'available' : 'coming_soon';
 
+/**
+ * Apps that belong together. Picking one pre-selects its `autoSelect` partners
+ * (the customer can untick them), and `related` ones are offered as hints.
+ * Unlike `dependencies`, none of this is enforced.
+ */
+const PAIRINGS = {
+  hr: { autoSelect: ['payroll'], related: ['tasks', 'documents', 'recruitment'] },
+  payroll: { autoSelect: [], related: ['hr', 'documents'] },
+  recruitment: { autoSelect: [], related: ['hr'] },
+  crm: { autoSelect: ['invoicing'], related: ['tasks', 'quotes', 'marketing'] },
+  invoicing: { autoSelect: [], related: ['crm', 'accounting'] },
+  tasks: { autoSelect: [], related: ['documents', 'crm', 'hr'] },
+  documents: { autoSelect: [], related: ['tasks', 'hr'] },
+};
+for (const app of APPS) {
+  app.pairs_with = PAIRINGS[app.slug]?.autoSelect ?? [];
+  app.related = PAIRINGS[app.slug]?.related ?? [];
+}
+
 const BY_SLUG = new Map(APPS.map((a) => [a.slug, a]));
 const BY_CATEGORY = new Map(APP_CATEGORIES.map((c) => [c.slug, c]));
 
@@ -1277,6 +1303,24 @@ export function resolveDependencies(slugs) {
 
   for (const slug of slugs) visit(slug);
   return ordered;
+}
+
+/**
+ * What picking `slug` should pre-select alongside it: its released pairings.
+ * The caller decides whether to apply them (only on a fresh pick, never to
+ * re-add something the customer deliberately removed).
+ */
+export function pairedApps(slug) {
+  return (BY_SLUG.get(slug)?.pairs_with ?? []).filter(
+    (other) => BY_SLUG.get(other)?.status === 'available',
+  );
+}
+
+/** Released apps that work well with `slug`, for "works well with" hints. */
+export function relatedApps(slug) {
+  return (BY_SLUG.get(slug)?.related ?? []).filter(
+    (other) => BY_SLUG.get(other)?.status === 'available',
+  );
 }
 
 /** Apps that would break if `slug` were removed from a given selection. */

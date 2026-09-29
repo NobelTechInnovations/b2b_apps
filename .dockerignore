@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+apps
+.next
+**/.next*
+.git
+.env
+.env.*
+!.env.example
+**/.data
+coverage
+tests
+docs
+infra
+tools
+.claude

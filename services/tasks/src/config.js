@@ -11,4 +11,5 @@ export const config = defineConfig({
   serviceToken: env('string', { required: true, secret: true }),
   gatewayUrl: env('string', { default: 'http://localhost:4000' }),
   tenancyUrl: env('string', { default: 'http://localhost:4002' }),
+  identityUrl: env('string', { default: 'http://localhost:4001' }),
 });

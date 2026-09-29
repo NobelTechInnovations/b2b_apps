@@ -66,7 +66,7 @@ async function main() {
 
   const sub = await call('/subscriptions', {
     method: 'POST',
-    body: { plan: 'growth', app_slugs: ['crm'], seats: 10, cycle: 'monthly' },
+    body: { plan: 'business', app_slugs: ['crm'], seats: 10, cycle: 'monthly' },
   });
   check('subscribed to CRM', sub.status === 201, `status ${sub.status}`);
   await new Promise((r) => setTimeout(r, 1500));
@@ -196,7 +196,7 @@ async function main() {
   await call('/auth/refresh', { method: 'POST', body: {} });
   await call('/subscriptions', {
     method: 'POST',
-    body: { plan: 'growth', app_slugs: ['crm'], seats: 5, cycle: 'monthly' },
+    body: { plan: 'business', app_slugs: ['crm'], seats: 5, cycle: 'monthly' },
   });
   await new Promise((r) => setTimeout(r, 1200));
 

@@ -1,5 +1,5 @@
 const ports = [4000, 4001, 4002, 4003, 4004, 4006, 4008, 4010, 4022, 4030, 4031, 4034, 4036];
-const deadline = Date.now() + 120000;
+const deadline = Date.now() + Number(process.env.READY_TIMEOUT_MS ?? 240000);
 const pending = new Set(ports);
 while (pending.size && Date.now() < deadline) {
   await Promise.all([...pending].map(async (port) => {

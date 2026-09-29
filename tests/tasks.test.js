@@ -9,7 +9,7 @@ test('projects and tasks workflow with isolation and permission boundaries', asy
   const otherUser = ok(await other.call('/me/workspace')).user.id;
   let project, task, child, milestone;
   await t.test('create project, milestone and assigned task', async () => {
-    project = ok(await owner.call('/tasks/projects', 'POST', { name: 'Customer onboarding', due_date: '2026-10-15' }), 201);
+    project = ok(await owner.call('/tasks/projects', 'POST', { name: 'Customer onboarding', due_date: '2026-10-15', visibility: 'workspace' }), 201);
     milestone = ok(await owner.call(`/tasks/projects/${project.id}/milestones`, 'POST', { title: 'Go live', due_date: '2026-10-12' }), 201);
     task = ok(await owner.call('/tasks', 'POST', { title: 'Prepare rollout', project_id: project.id, milestone_id: milestone.id, assignee_id: me, due_date: '2026-10-10', priority: 'high' }), 201);
     assert.equal(ok(await owner.call('/tasks?mine=true')).length, 1);
@@ -51,7 +51,7 @@ test('projects and tasks workflow with isolation and permission boundaries', asy
     assert.equal(projectTime.data.length, 2);
     assert.equal(projectTime.data.every(entry => entry.project_id === project.id), true);
     assert.equal(ok(await owner.call('/tasks/projects')).find(p => p.id === project.id).logged_minutes, 75);
-    assert.equal((await other.call(`/tasks/time?project_id=${project.id}`)).meta.minutes, 0);
+    assert.equal((await other.call(`/tasks/time?project_id=${project.id}`)).status, 404);
   });
   await t.test('CRM and HR source records are verified in the caller workspace', async () => {
     const lead = ok(await owner.call('/crm/leads', 'POST', { first_name: 'Customer', last_name: 'Lead' }), 201);
@@ -74,15 +74,16 @@ test('projects and tasks workflow with isolation and permission boundaries', asy
     assert.equal((await owner.call(`/tasks/${task.id}/attachments`, 'POST', { document_id: foreignDocument.id })).status, 400);
     assert.equal(ok(await owner.call(`/tasks/${task.id}`)).attachments.length, 1);
   });
-  await t.test('guest reads but cannot mutate; employee cannot access tasks', async () => {
+  await t.test('guest reads but cannot mutate; employee sees open boards but cannot create them', async () => {
     const guest = await invite(owner, 'guest', `${stamp}-guest`);
     ok(await guest.call(`/tasks/${task.id}`));
     assert.equal((await guest.call('/tasks', 'POST', { title: 'Forbidden' })).status, 403);
     assert.equal((await guest.call(`/tasks/${task.id}`, 'PATCH', { status: 'done' })).status, 403);
     assert.equal((await guest.call(`/tasks/${task.id}/time`, 'POST', { minutes: 5, worked_on: '2026-09-23' })).status, 403);
     const employee = await invite(owner, 'employee', `${stamp}-employee`);
-    assert.equal((await employee.call('/tasks')).status, 403);
-    assert.equal((await employee.call(`/tasks/${task.id}`)).status, 403);
+    ok(await employee.call(`/tasks/${task.id}`));
+    assert.equal((await employee.call('/tasks/projects', 'POST', { name: 'Not mine to make' })).status, 403);
+    assert.equal((await employee.call(`/tasks/projects/${project.id}`, 'PATCH', { name: 'Renamed' })).status, 403);
   });
   await t.test('project lifecycle and uninstall are enforced', async () => {
     assert.equal((await owner.call(`/tasks/projects/${project.id}`, 'PATCH', { status: 'completed' })).status, 400);

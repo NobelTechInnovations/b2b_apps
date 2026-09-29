@@ -6,7 +6,7 @@
  * Fails closed: if tenancy is unreachable, the user gets a session with no org
  * context rather than an unverified one.
  */
-export function createTenancyClient({ baseUrl, serviceToken, logger, timeoutMs = 3_000 }) {
+export function createTenancyClient({ baseUrl, serviceToken, logger, timeoutMs = Number(process.env.INTERNAL_TIMEOUT_MS) || 8_000 }) {
   async function call(path, options = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);

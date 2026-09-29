@@ -65,7 +65,7 @@ async function main() {
 
   const sub = await call('/subscriptions', {
     method: 'POST',
-    body: { plan: 'growth', app_slugs: ['invoicing', 'crm'], seats: 10, cycle: 'monthly' },
+    body: { plan: 'business', app_slugs: ['invoicing', 'crm'], seats: 10, cycle: 'monthly' },
   });
   check('subscribed', sub.status === 201, `status ${sub.status}`);
   await settle(1800);
@@ -348,7 +348,7 @@ async function main() {
   await call('/organizations', { method: 'POST', body: { name: `Other Inv ${stamp}` } });
   await call('/auth/refresh', { method: 'POST', body: {} });
   await call('/subscriptions', {
-    method: 'POST', body: { plan: 'growth', app_slugs: ['invoicing'], seats: 5, cycle: 'monthly' },
+    method: 'POST', body: { plan: 'business', app_slugs: ['invoicing'], seats: 5, cycle: 'monthly' },
   });
   await settle(1500);
 

@@ -16,7 +16,7 @@ const NAME = 'catalog';
 const db = createDb({ url: config.databaseUrl, appName: NAME });
 await runMigrations({ db, dir: path.join(here, '..', 'migrations'), logger: console });
 
-const bus = await createBus({ servers: config.natsUrl, name: NAME }).catch((error) => {
+const bus = await createBus({ servers: config.natsUrl, name: NAME, db }).catch((error) => {
   console.warn(`  ! event bus unavailable (${error.message})`);
   return null;
 });

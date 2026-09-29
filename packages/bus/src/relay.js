@@ -1,4 +1,4 @@
-import { claimOutbox, markOutboxSent } from '@nexus/db-kit';
+import { claimOutbox, markOutboxSent, outboxSignal } from '@nexus/db-kit';
 
 /**
  * Outbox relay.
@@ -8,12 +8,17 @@ import { claimOutbox, markOutboxSent } from '@nexus/db-kit';
  * change, an event can never exist without its cause, and a committed change
  * can never lose its event.
  */
-export function startOutboxRelay({ db, bus, logger, intervalMs = 500, batch = 100 }) {
+export function startOutboxRelay({ db, bus, logger, intervalMs = Number(process.env.OUTBOX_POLL_MS) || 3_000, batch = 100 }) {
   let running = true;
   let timer;
+  let busy = false;
+  let again = false;
 
   async function tick() {
     if (!running) return;
+    if (busy) { again = true; return; }
+    busy = true;
+    clearTimeout(timer);
     try {
       const events = await claimOutbox(db, { batch });
       if (events.length) {
@@ -34,9 +39,16 @@ export function startOutboxRelay({ db, bus, logger, intervalMs = 500, batch = 10
     } catch (error) {
       logger.error({ err: error }, 'outbox relay tick failed');
     } finally {
-      if (running) timer = setTimeout(tick, intervalMs);
+      busy = false;
+      if (running) timer = setTimeout(tick, again ? 0 : intervalMs);
+      again = false;
     }
   }
+
+  // A committed write wakes the relay at once; the poll only catches the rest
+  // (rows written outside a transaction, or by a process that crashed).
+  const wake = () => { if (running) setImmediate(tick); };
+  outboxSignal.on('written', wake);
 
   timer = setTimeout(tick, intervalMs);
   logger.info('outbox relay started');
@@ -44,6 +56,7 @@ export function startOutboxRelay({ db, bus, logger, intervalMs = 500, batch = 10
   return {
     stop() {
       running = false;
+      outboxSignal.off('written', wake);
       clearTimeout(timer);
     },
   };

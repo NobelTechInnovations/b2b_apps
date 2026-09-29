@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { serverApi } from '@/lib/server-api';
+import { resolveTenant } from '@/lib/tenant-guard';
+import { WorkspaceGate } from '@/components/shell/workspace-gate';
 import { AppShell } from '@/components/shell/app-shell';
 
 /**
@@ -35,6 +37,10 @@ export default async function AppLayout({ children }) {
       </div>
     );
   }
+
+  // The company this address belongs to decides which workspace is shown.
+  const tenant = await resolveTenant(me.data);
+  if (!tenant.ok) return <WorkspaceGate switchTo={tenant.switchTo} noAccess={tenant.noAccess} />;
 
   if (workspace.data?.needs_onboarding) redirect('/onboarding');
 

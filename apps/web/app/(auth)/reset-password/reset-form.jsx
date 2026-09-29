@@ -79,7 +79,7 @@ export default function ResetForm() {
 
       {error && <Alert tone="critical" className="mt-5">{error}</Alert>}
 
-      <form onSubmit={onSubmit} className="mt-6 space-y-4">
+      <form method="post" onSubmit={onSubmit} className="mt-6 space-y-4">
         <Field label="New password">
           {(props) => (
             <PasswordInput

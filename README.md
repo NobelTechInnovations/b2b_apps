@@ -19,6 +19,11 @@ pnpm dev             # every service + the web app
 
 Then open **http://localhost:3000** and create a workspace.
 
+To run on **Supabase** instead of local docker, set `DATABASE_URL` to its
+transaction-pooler URL and `BUS_DRIVER=postgres` (see `.env.example`) — no
+docker needed. Deploying to Vercel + Railway: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+Latest review and changes: [docs/REVIEW_2026-09-29.md](docs/REVIEW_2026-09-29.md).
+
 ```bash
 pnpm smoke           # the platform: auth, tenancy, entitlements, permissions
 pnpm smoke:all       # every suite

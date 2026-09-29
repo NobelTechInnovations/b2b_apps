@@ -10,16 +10,19 @@ import { forbidden } from '@nexus/service-kit';
 export function createAuthz({ tenancyUrl, billingUrl, catalogUrl, serviceToken, logger, ttlMs = 30_000 }) {
   const permissionCache = new Map();
   const entitlementCache = new Map();
+  const installedCache = new Map();
+  const timeoutMs = Number(process.env.INTERNAL_TIMEOUT_MS) || 8_000;
 
   setInterval(() => {
     const now = Date.now();
     for (const [key, entry] of permissionCache) if (entry.expires < now) permissionCache.delete(key);
     for (const [key, entry] of entitlementCache) if (entry.expires < now) entitlementCache.delete(key);
+    for (const [key, entry] of installedCache) if (entry.expires < now) installedCache.delete(key);
   }, 60_000).unref();
 
   async function fetchJson(url, label) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3_000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(url, {
         signal: controller.signal,
@@ -33,9 +36,14 @@ export function createAuthz({ tenancyUrl, billingUrl, catalogUrl, serviceToken, 
   }
 
   return {
+    /** Which apps are switched on. Cached like entitlements, dropped on the same events. */
     async installed(orgId) {
+      const hit = installedCache.get(orgId);
+      if (hit && hit.expires > Date.now()) return hit.value;
       const data = await fetchJson(`${catalogUrl}/internal/orgs/${orgId}/apps`, 'catalog');
-      return new Set((data ?? []).map((row) => row.app_slug));
+      const value = new Set((data ?? []).map((row) => row.app_slug));
+      installedCache.set(orgId, { value, expires: Date.now() + ttlMs });
+      return value;
     },
 
     /** Who is this person in this workspace, and what may they do? */
@@ -87,12 +95,13 @@ export function createAuthz({ tenancyUrl, billingUrl, catalogUrl, serviceToken, 
 
     invalidate(orgId) {
       entitlementCache.delete(orgId);
+      installedCache.delete(orgId);
       for (const key of permissionCache.keys()) {
         if (key.startsWith(`${orgId}:`)) permissionCache.delete(key);
       }
       logger.debug({ orgId }, 'authorization cache invalidated');
     },
 
-    stats: () => ({ permissions: permissionCache.size, entitlements: entitlementCache.size }),
+    stats: () => ({ permissions: permissionCache.size, entitlements: entitlementCache.size, installed: installedCache.size }),
   };
 }

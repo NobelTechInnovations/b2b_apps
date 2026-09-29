@@ -105,7 +105,7 @@ async function main() {
   step(4, 'Quote a subscription');
   const quote = await call('/subscriptions/quote', {
     method: 'POST',
-    body: { plan: 'growth', app_slugs: ['crm', 'payroll'], seats: 25, cycle: 'monthly' },
+    body: { plan: 'business', app_slugs: ['crm', 'payroll'], seats: 25, cycle: 'monthly' },
   });
   check('quote returned', quote.status === 200, `status ${quote.status}`);
   check('dependencies auto-resolved',
@@ -117,7 +117,7 @@ async function main() {
   step(5, 'Subscribe');
   const subscription = await call('/subscriptions', {
     method: 'POST',
-    body: { plan: 'growth', app_slugs: ['crm', 'hr'], seats: 25, cycle: 'monthly' },
+    body: { plan: 'business', app_slugs: ['crm', 'hr'], seats: 25, cycle: 'monthly' },
   });
   check('subscription created', subscription.status === 201, `status ${subscription.status}`);
   check('starts in trial', subscription.body?.data?.subscription?.status === 'trialing');

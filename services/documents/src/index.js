@@ -21,7 +21,7 @@ await runMigrations({ db, dir: path.join(here, '..', 'migrations'), logger: cons
 
 await mkdir(config.storageRoot, { recursive: true });
 
-const bus = await createBus({ servers: config.natsUrl, name: NAME }).catch((error) => {
+const bus = await createBus({ servers: config.natsUrl, name: NAME, db }).catch((error) => {
   console.warn(`  ! event bus unavailable (${error.message}) — events will queue in the outbox`);
   return null;
 });

@@ -87,7 +87,7 @@ async function main() {
   await owner('/auth/register', { method: 'POST', body: { email: `ntf+${stamp}@nexus.test`, password: 'correct-horse-battery-7', name: 'Owner' } });
   await owner('/organizations', { method: 'POST', body: { name: `Notify Works ${stamp}` } });
   await owner('/auth/refresh', { method: 'POST', body: {} });
-  const sub = await owner('/subscriptions', { method: 'POST', body: { plan: 'growth', app_slugs: ['hr', 'tasks'], seats: 10, cycle: 'monthly' } });
+  const sub = await owner('/subscriptions', { method: 'POST', body: { plan: 'business', app_slugs: ['hr', 'tasks'], seats: 10, cycle: 'monthly' } });
   check('subscribed to HR and Tasks', sub.status === 201, JSON.stringify(sub.body?.error ?? '').slice(0, 140));
   await settle();
 

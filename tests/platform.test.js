@@ -16,22 +16,21 @@ test('platform permission and lifecycle regressions', async (t) => {
       ]) assert.equal((await user.call(path, method, body)).status, 403, `${role}: ${method} ${path}`);
     });
   }
-  await t.test('owner can manage billing; cycle and plan changes reprice items', async () => {
+  await t.test('owner can manage billing; plan and cycle changes re-price the open invoice', async () => {
     const plans = ok(await owner.call('/plans'));
-    assert.ok(plans.length);
-    const before = ok(await owner.call('/subscriptions/current'));
-    const crmMonthly = Number(before.items.find(i => i.app_slug === 'crm').unit_price);
+    assert.deepEqual(plans.map((p) => p.slug), ['basic', 'business']);
     ok(await owner.call('/subscriptions/current', 'PATCH', { cycle: 'annual', seats: 26 }));
     const annual = ok(await owner.call('/subscriptions/current'));
     assert.equal(annual.seats, 26);
-    assert.ok(Number(annual.items.find(i => i.app_slug === 'crm').unit_price) > crmMonthly);
-    assert.equal(Number(annual.items.find(i => i.app_slug === 'documents').unit_price), 0);
-    ok(await owner.call('/subscriptions/current', 'PATCH', { plan: 'starter', seats: 5, cycle: 'monthly' }));
-    const starter = ok(await owner.call('/subscriptions/current'));
-    assert.ok(Number(starter.items.find(i => i.app_slug === 'documents').unit_price) > 0);
+    assert.equal(annual.term_quote.months, 10);
+    ok(await owner.call('/subscriptions/current', 'PATCH', { plan: 'basic', seats: 12, cycle: 'monthly' }));
+    const basic = ok(await owner.call('/subscriptions/current'));
+    assert.equal(basic.plan, 'basic');
+    assert.ok(basic.items.every((item) => Number(item.unit_price) === 0), 'apps are never priced one by one');
+    assert.equal(basic.invoices.filter((i) => i.status === 'open').length, 1, 'exactly one open term invoice');
   });
   await t.test('unbuilt apps cannot be quoted or purchased', async () => {
-    assert.equal((await owner.call('/subscriptions/quote', 'POST', { plan: 'growth', app_slugs: ['manufacturing'] })).status, 400);
+    assert.equal((await owner.call('/subscriptions/quote', 'POST', { plan: 'business', app_slugs: ['manufacturing'] })).status, 400);
     assert.equal((await owner.call('/subscriptions/current/apps', 'POST', { app_slug: 'accounting' })).status, 400);
   });
   await t.test('uninstall disables API; reinstall restores access', async () => {

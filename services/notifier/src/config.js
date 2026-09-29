@@ -11,4 +11,7 @@ export const config = defineConfig({
   serviceToken: env('string', { required: true, secret: true }),
   // Who holds a permission is tenancy's to answer.
   tenancyUrl: env('string', { default: 'http://localhost:4002' }),
+  // smtps://user:password@smtp.example.com:465 — unset means "log, don't send".
+  smtpUrl: env('string', { default: '', secret: true }),
+  mailFrom: env('string', { default: 'Nexus <no-reply@localhost>' }),
 });

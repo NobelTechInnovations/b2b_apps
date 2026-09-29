@@ -17,6 +17,7 @@ import { Drawer, DetailGrid } from '@/components/data/drawer';
 import { ListToolbar } from '@/components/data/list-shell';
 import { Card, EmptyState, PageHeader, Badge, Alert, Skeleton } from '@/components/ui/primitives';
 import { ImportWizard } from './import-wizard';
+import { API_BASE } from '@/lib/api-base';
 
 const KIND = {
   spreadsheet: { icon: FileSpreadsheet, tint: 'bg-[#ecfdf5] text-[#059669] dark:bg-[rgb(16_185_129/0.14)] dark:text-[#6ee7b7]' },
@@ -94,7 +95,7 @@ export default function DocumentsClient() {
 
       try {
         const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/documents/upload`,
+          `${API_BASE}/api/documents/upload`,
           { method: 'POST', credentials: 'include', body: form },
         );
         const payload = await response.json();
@@ -323,7 +324,7 @@ export default function DocumentsClient() {
                     </Button>
                   )}
                   <a
-                    href={`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/documents/${document.id}/download`}
+                    href={`${API_BASE}/api/documents/${document.id}/download`}
                   >
                     <Button variant="ghost" size="icon-sm" aria-label={`Download ${document.name}`}>
                       <Download className="size-4" />
@@ -402,7 +403,7 @@ function DocumentDrawer({ documentId, onClose, onImport }) {
             <span className={cn('flex size-14 items-center justify-center rounded-[var(--radius-xl)]', meta.tint)}>
               <meta.icon className="size-7" strokeWidth={1.5} />
             </span>
-            <a href={`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/documents/${document.id}/download`}>
+            <a href={`${API_BASE}/api/documents/${document.id}/download`}>
               <Button variant="secondary" size="sm" icon={Download}>Download</Button>
             </a>
           </div>

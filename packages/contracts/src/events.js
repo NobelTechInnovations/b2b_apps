@@ -70,6 +70,7 @@ export const EVENTS = {
   TASK_CREATED: 'tasks.task.created',
   TASK_ASSIGNED: 'tasks.task.assigned',
   TASK_COMPLETED: 'tasks.task.completed',
+  BOARD_MEMBER_ADDED: 'tasks.board.member_added',
 
   // ── platform ────────────────────────────────────────────────────────────
   FILE_UPLOADED: 'files.file.uploaded',

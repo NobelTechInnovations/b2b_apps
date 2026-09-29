@@ -57,6 +57,7 @@ export async function authRoutes(app) {
             email: v.email,
             password: v.text(200, 8),
             name: v.text(120, 2),
+            phone: { type: 'string', maxLength: 20, pattern: '^[+0-9 ()-]{6,20}$' },
             invitation_token: { type: 'string', maxLength: 200 },
           },
           ['email', 'password', 'name'],
@@ -95,9 +96,9 @@ export async function authRoutes(app) {
 
       const user = await db.transaction(async (tx) => {
         const created = await tx.one(
-          `INSERT INTO users (id, email, email_normalized, password_hash, name)
-           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-          [id('usr'), request.body.email.trim(), email, passwordHash, name.trim()],
+          `INSERT INTO users (id, email, email_normalized, password_hash, name, phone)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+          [id('usr'), request.body.email.trim(), email, passwordHash, name.trim(), request.body.phone?.trim() || null],
         );
 
         await tx.query(
@@ -145,7 +146,7 @@ export async function authRoutes(app) {
       return reply.status(201).send({
         data: {
           user: publicUser(user),
-          organization: membership ? { id: membership.org_id, name: membership.org_name } : null,
+          organization: membership ? { id: membership.org_id, name: membership.org_name, slug: membership.org_slug } : null,
           needs_onboarding: !orgId,
           access_token: accessToken,
           expires_in: config.accessTokenTtl,
@@ -254,7 +255,7 @@ export async function authRoutes(app) {
       return {
         data: {
           user: publicUser(user),
-          organization: membership ? { id: membership.org_id, name: membership.org_name } : null,
+          organization: membership ? { id: membership.org_id, name: membership.org_name, slug: membership.org_slug } : null,
           organizations: memberships.map((m) => ({
             id: m.org_id,
             name: m.org_name,
@@ -333,7 +334,7 @@ export async function authRoutes(app) {
       return {
         data: {
           user: publicUser(user),
-          organization: membership ? { id: membership.org_id, name: membership.org_name } : null,
+          organization: membership ? { id: membership.org_id, name: membership.org_name, slug: membership.org_slug } : null,
           access_token: accessToken,
           expires_in: config.accessTokenTtl,
         },

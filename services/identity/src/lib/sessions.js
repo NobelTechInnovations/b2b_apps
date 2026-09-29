@@ -1,3 +1,4 @@
+import { EVENTS } from '@nexus/contracts/events';
 import { id } from '@nexus/db-kit';
 import { newRefreshToken, hashToken } from './tokens-helpers.js';
 
@@ -52,6 +53,7 @@ export async function rotateSession(db, { presented, config, request }) {
            WHERE family_id = $1 AND revoked_at IS NULL`,
           [reused.family_id],
         );
+        await announceRevoked(tx, { userId: reused.user_id, all: true, reason: 'token_reuse_detected' });
         return { outcome: 'reuse_detected', familyId: reused.family_id, userId: reused.user_id };
       }
       return { outcome: 'unknown' };
@@ -77,12 +79,26 @@ export async function rotateSession(db, { presented, config, request }) {
   });
 }
 
+/**
+ * Tell every verifier that holds a short-lived cache of session checks (the
+ * gateway) to forget these sessions now, rather than when its cache expires.
+ */
+export async function announceRevoked(db, { sessionId = null, userId, all = false, reason }) {
+  await db.query(
+    `INSERT INTO outbox (id, type, actor_id, data) VALUES ($1, $2, $3, $4)`,
+    [id('evt'), EVENTS.SESSION_REVOKED, userId ?? null,
+      JSON.stringify({ session_id: sessionId, user_id: userId, all, reason })],
+  );
+}
+
 export async function revokeSession(db, sessionId, reason = 'signed_out') {
-  return db.one(
+  const row = await db.one(
     `UPDATE sessions SET revoked_at = now(), revoked_reason = $2
       WHERE id = $1 AND revoked_at IS NULL RETURNING id, user_id`,
     [sessionId, reason],
   );
+  if (row) await announceRevoked(db, { sessionId, userId: row.user_id, reason });
+  return row;
 }
 
 export async function revokeAllSessions(db, userId, { except, reason = 'revoked_all' } = {}) {
@@ -91,6 +107,7 @@ export async function revokeAllSessions(db, userId, { except, reason = 'revoked_
       WHERE user_id = $1 AND revoked_at IS NULL AND ($2::text IS NULL OR id <> $2)`,
     [userId, except ?? null, reason],
   );
+  if (rowCount) await announceRevoked(db, { userId, all: true, reason });
   return rowCount;
 }
 

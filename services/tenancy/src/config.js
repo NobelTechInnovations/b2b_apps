@@ -10,6 +10,9 @@ export const config = defineConfig({
   cookieSecret: env('string', { required: true, secret: true }),
   serviceToken: env('string', { required: true, secret: true }),
   identityUrl: env('string', { default: 'http://localhost:4001' }),
+  billingUrl: env('string', { default: 'http://localhost:4004' }),
   appUrl: env('string', { default: 'http://localhost:3000' }),
+  // e.g. nexusapp.in → each company at <slug>.nexusapp.in. Empty = no subdomains.
+  rootDomain: env('string', { default: '' }),
   webOrigin: env('list', { default: ['http://localhost:3000'] }),
 });

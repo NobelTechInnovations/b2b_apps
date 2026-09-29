@@ -10,4 +10,13 @@ export const config = defineConfig({
   cookieSecret: env('string', { required: true, secret: true }),
   serviceToken: env('string', { required: true, secret: true }),
   catalogUrl: env('string', { default: 'http://localhost:4003' }),
+  tenancyUrl: env('string', { default: 'http://localhost:4002' }),
+
+  // Razorpay. Without keys, online payment is off (and, with BILLING_TEST_MODE,
+  // invoices can be settled by a local "test payment" instead).
+  razorpayKeyId: env('string', { default: '' }),
+  razorpayKeySecret: env('string', { default: '', secret: true }),
+  razorpayWebhookSecret: env('string', { default: '', secret: true }),
+  billingTestMode: env('boolean', { default: false }),
+  billingCompanyName: env('string', { default: 'Nexus' }),
 });

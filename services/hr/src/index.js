@@ -27,7 +27,7 @@ const db = createDb({ url: config.databaseUrl, appName: NAME, max: 15 });
 await runMigrations({ db, dir: path.join(here, '..', 'migrations'), logger: console });
 
 // Portal linking and approval workflows require the consumers to be running.
-const bus = await createBus({ servers: config.natsUrl, name: NAME });
+const bus = await createBus({ servers: config.natsUrl, name: NAME, db });
 
 const app = await createService({ name: NAME, config, db, bus });
 

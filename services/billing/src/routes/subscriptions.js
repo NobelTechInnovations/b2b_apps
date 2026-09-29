@@ -1,56 +1,87 @@
 import { id } from '@nexus/db-kit';
-import { requirePermission, body, validate as v, notFound, badRequest, forbidden } from '@nexus/service-kit';
+import { requirePermission, body, validate as v, notFound, badRequest } from '@nexus/service-kit';
 import { appBySlug, resolveDependencies } from '@nexus/contracts';
 import { EVENTS } from '@nexus/contracts/events';
-import { quote, periodEnd } from '../lib/pricing.js';
+import { quote } from '../lib/pricing.js';
 import { recomputeEntitlements } from '../lib/entitlements.js';
+import {
+  issueTermInvoice, issueAdjustment, priceSubscription, subscribedApps, shapeInvoice,
+} from '../lib/invoices.js';
 
 export async function subscriptionRoutes(app) {
-  const { db, catalog } = app;
+  const { db, catalog, config, razorpay } = app;
 
-  async function loadPricing(planSlug, appSlugs) {
-    const plan = await db.one(`SELECT * FROM plans WHERE slug = $1`, [planSlug]);
-    if (!plan) throw badRequest(`Unknown plan: ${planSlug}`);
+  /** A plan a customer may choose today. Retired plans only live on as history. */
+  async function offeredPlan(slug) {
+    const plan = await db.one(`SELECT * FROM plans WHERE slug = $1 AND is_public AND NOT is_retired`, [slug]);
+    if (!plan) throw badRequest(`Unknown plan: ${slug}`, { code: 'unknown_plan' });
+    return plan;
+  }
 
-    const included = new Set(
-      (await db.rows(`SELECT app_slug FROM plan_apps WHERE plan_slug = $1`, [planSlug])).map(
-        (r) => r.app_slug,
-      ),
+  /** Released, non-core apps with their names, in the order given. */
+  function releasedApps(slugs) {
+    return slugs
+      .filter((slug) => slug !== 'core')
+      .map((slug) => {
+        const definition = appBySlug(slug);
+        if (!definition) throw badRequest(`Unknown app: ${slug}`);
+        if (definition.status === 'coming_soon') throw badRequest(`${definition.name} is not available yet.`);
+        return { slug, name: definition.name };
+      });
+  }
+
+  /** A plan's seats are a floor: 5 people on Basic still get its 10 seats. */
+  const seatsFor = (plan, requested) => Math.max(Number(plan.included_users), requested ?? 0);
+
+  async function current(orgId, store = db, lock = false) {
+    return store.one(
+      `SELECT * FROM subscriptions WHERE org_id = $1 AND status <> 'canceled'${lock ? ' FOR UPDATE' : ''}`,
+      [orgId],
     );
+  }
 
-    const prices = await db.rows(`SELECT * FROM app_prices WHERE app_slug = ANY($1)`, [appSlugs]);
-    const byslug = new Map(prices.map((p) => [p.app_slug, p]));
-
-    const apps = appSlugs.map((slug) => {
-      const price = byslug.get(slug);
-      const definition = appBySlug(slug);
-      if (!price || !definition) throw badRequest(`Unknown app: ${slug}`);
-      if (definition.status === 'coming_soon') throw badRequest(`${definition.name} is not available yet.`);
-      return {
-        slug,
-        name: definition.name,
-        price_monthly: price.price_monthly,
-        price_annual: price.price_annual,
-        billing_unit: price.billing_unit,
-        included_in_plan: included.has(slug),
-      };
+  async function seatUsage(orgId) {
+    const response = await fetch(`${config.tenancyUrl}/internal/orgs/${orgId}/stats`, {
+      headers: { 'x-nexus-service-token': config.serviceToken },
+      signal: AbortSignal.timeout(4_000),
     });
+    if (!response.ok) throw app.httpErrors.serviceUnavailable('Could not check how many seats are in use.');
+    const stats = (await response.json()).data;
+    return Number(stats.active_members ?? 0) + Number(stats.pending_invitations ?? 0);
+  }
 
-    return { plan, apps, included };
+  /**
+   * After any change to plan, seats or apps: a paid term is charged the
+   * prorated difference now; an unpaid term's invoice is re-issued at the new
+   * price. The upcoming renewal, if already raised, is re-priced too.
+   */
+  async function afterChange(tx, subscriptionId, before, reason) {
+    const fresh = await tx.one(`SELECT * FROM subscriptions WHERE id = $1`, [subscriptionId]);
+    if (fresh.status === 'active') {
+      // The paid term keeps the cycle it was bought on; a cycle change only
+      // applies from the next term. So the mid-term difference is priced on
+      // the term's own cycle, the same one `before` was priced on.
+      const after = await priceSubscription(tx, fresh, { cycle: before.cycle });
+      const adjustment = await issueAdjustment(tx, fresh, { before, after, reason });
+      const renewal = await tx.one(
+        `SELECT 1 FROM invoices WHERE subscription_id = $1 AND status = 'open' AND kind = 'renewal'`,
+        [fresh.id],
+      );
+      if (renewal) await issueTermInvoice(tx, fresh);
+      return adjustment;
+    }
+    await issueTermInvoice(tx, fresh);
+    return null;
   }
 
   // ═══════════════════════════════════════════════════════ PLANS + PRICE QUOTE
   app.get('/plans', async () => {
-    const plans = await db.rows(`SELECT * FROM plans WHERE is_public = true ORDER BY sort_order`);
-    const planApps = await db.rows(`SELECT * FROM plan_apps`);
-    const prices = await db.rows(`SELECT * FROM app_prices ORDER BY app_slug`);
-
+    const plans = await db.rows(
+      `SELECT * FROM plans WHERE is_public AND NOT is_retired ORDER BY sort_order`,
+    );
     return {
-      data: plans.map((p) => ({
-        ...p,
-        included_apps: planApps.filter((pa) => pa.plan_slug === p.slug).map((pa) => pa.app_slug),
-      })),
-      meta: { app_prices: prices },
+      data: plans.map((p) => ({ ...p, included_apps: [] })),
+      meta: { app_prices: [], currency: 'INR', gst_rate: Number(process.env.BILLING_GST_RATE ?? 0.18) },
     };
   });
 
@@ -62,7 +93,7 @@ export async function subscriptionRoutes(app) {
         body: body(
           {
             plan: v.slug,
-            app_slugs: { type: 'array', items: v.slug, maxItems: 30, default: [] },
+            app_slugs: { type: 'array', items: v.slug, maxItems: 40, default: [] },
             seats: v.int(1, 100000),
             cycle: v.enum(['monthly', 'annual']),
           },
@@ -71,30 +102,30 @@ export async function subscriptionRoutes(app) {
       },
     },
     async (request) => {
-      const seats = request.body.seats ?? 5;
+      const plan = await offeredPlan(request.body.plan);
+      const seats = seatsFor(plan, request.body.seats);
       const cycle = request.body.cycle ?? 'monthly';
       const requested = resolveDependencies(request.body.app_slugs ?? []);
-
-      const { plan, apps } = await loadPricing(request.body.plan, requested);
-
-      if (plan.max_users && seats > plan.max_users) {
-        throw badRequest(`The ${plan.name} plan supports up to ${plan.max_users} users.`, {
-          code: 'seat_limit',
-          max_users: plan.max_users,
-        });
-      }
+      const apps = releasedApps(requested);
 
       const monthly = quote({ plan, apps, seats, cycle: 'monthly' });
       const annual = quote({ plan, apps, seats, cycle: 'annual' });
       const saving = (Number(monthly.total) * 12 - Number(annual.total)).toFixed(2);
-
       const chosen = cycle === 'annual' ? annual : monthly;
 
       return {
         data: {
           ...chosen,
-          plan: { slug: plan.slug, name: plan.name, included_users: plan.included_users },
-          apps: requested,
+          plan: {
+            slug: plan.slug,
+            name: plan.name,
+            included_users: plan.included_users,
+            included_app_count: plan.included_app_count,
+            extra_user_price: plan.extra_user_price,
+            extra_app_price: plan.extra_app_price,
+            trial_days: plan.trial_days,
+          },
+          apps: requested.filter((slug) => slug !== 'core'),
           auto_added: requested.filter((s) => !(request.body.app_slugs ?? []).includes(s)),
           compare: {
             monthly_total: monthly.total,
@@ -116,7 +147,7 @@ export async function subscriptionRoutes(app) {
         body: body(
           {
             plan: v.slug,
-            app_slugs: { type: 'array', items: v.slug, maxItems: 30, default: [] },
+            app_slugs: { type: 'array', items: v.slug, maxItems: 40, default: [] },
             seats: v.int(1, 100000),
             cycle: v.enum(['monthly', 'annual']),
           },
@@ -128,40 +159,37 @@ export async function subscriptionRoutes(app) {
       const orgId = request.auth.orgId;
       const actorId = request.auth.userId;
 
-      const existing = await db.one(
-        `SELECT id FROM subscriptions WHERE org_id = $1 AND status <> 'canceled'`,
-        [orgId],
-      );
-      if (existing) {
-        throw badRequest('This workspace already has a subscription. Change it instead.', {
-          code: 'already_subscribed',
-        });
-      }
-
-      const seats = request.body.seats ?? 5;
+      const plan = await offeredPlan(request.body.plan);
+      const seats = seatsFor(plan, request.body.seats);
       const cycle = request.body.cycle ?? 'monthly';
       const requested = resolveDependencies(request.body.app_slugs ?? []);
-      const { plan, apps, included } = await loadPricing(request.body.plan, requested);
-
-      if (plan.max_users && seats > plan.max_users) {
-        throw badRequest(`The ${plan.name} plan supports up to ${plan.max_users} users.`);
-      }
-
+      const apps = releasedApps(requested);
       const priced = quote({ plan, apps, seats, cycle });
 
-      const subscription = await db.transaction(async (tx) => {
-        const now = new Date();
-        const trialEnds = new Date(now.getTime() + plan.trial_days * 86_400_000);
+      const { subscription, invoice } = await db.transaction(async (tx) => {
+        // Serialise per workspace so two tabs cannot both subscribe.
+        await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`billing:${orgId}`]);
+        if (await current(orgId, tx)) {
+          throw badRequest('This workspace already has a subscription. Change it instead.', {
+            code: 'already_subscribed',
+          });
+        }
 
+        const now = new Date();
+        const trial = Number(plan.trial_days) > 0;
+        const trialEnds = trial ? new Date(now.getTime() + plan.trial_days * 86_400_000) : null;
+
+        // Until the first invoice is paid, the "current period" is the trial
+        // (or nothing at all), never a paid month that nobody paid for.
         const created = await tx.one(
           `INSERT INTO subscriptions
              (id, org_id, plan_slug, status, billing_cycle, currency, seats,
               trial_ends_at, current_period_start, current_period_end)
-           VALUES ($1, $2, $3, 'trialing', $4, $5, $6, $7, $8, $9)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING *`,
           [
-            id('sub'), orgId, plan.slug, cycle, plan.currency, seats,
-            trialEnds, now, periodEnd(now, cycle),
+            id('sub'), orgId, plan.slug, trial ? 'trialing' : 'incomplete', cycle, plan.currency, seats,
+            trialEnds, now, trialEnds ?? now,
           ],
         );
 
@@ -169,20 +197,13 @@ export async function subscriptionRoutes(app) {
           await tx.query(
             `INSERT INTO subscription_items
                (id, org_id, subscription_id, app_slug, quantity, unit_price, billing_unit, source)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [
-              id('sit'), orgId, created.id, appItem.slug,
-              appItem.billing_unit === 'user' ? seats : 1,
-              included.has(appItem.slug)
-                ? 0
-                : cycle === 'annual' ? appItem.price_annual : appItem.price_monthly,
-              appItem.billing_unit,
-              included.has(appItem.slug) ? 'plan' : 'addon',
-            ],
+             VALUES ($1, $2, $3, $4, 1, 0, 'org', 'addon')`,
+            [id('sit'), orgId, created.id, appItem.slug],
           );
         }
 
         await recomputeEntitlements(tx, orgId, { actorId });
+        const firstInvoice = await issueTermInvoice(tx, created);
 
         tx.emit({
           type: EVENTS.SUBSCRIPTION_CREATED,
@@ -199,14 +220,20 @@ export async function subscriptionRoutes(app) {
           },
         });
 
-        return created;
+        return { subscription: created, invoice: firstInvoice };
       });
 
       // Turn the purchase into a working workspace right away.
       await catalog.provision(orgId, requested, actorId);
 
       return reply.status(201).send({
-        data: { subscription: shape(subscription), apps: requested, quote: priced },
+        data: {
+          subscription: shape(subscription),
+          apps: requested,
+          quote: priced,
+          invoice: invoice ? shapeInvoice(invoice) : null,
+          payment_required_now: subscription.status === 'incomplete',
+        },
       });
     },
   );
@@ -216,7 +243,9 @@ export async function subscriptionRoutes(app) {
     const orgId = request.auth.orgId;
 
     const subscription = await db.one(
-      `SELECT s.*, p.name AS plan_name, p.included_users, p.storage_gb, p.extra_user_price, p.features
+      `SELECT s.*, p.name AS plan_name, p.included_users, p.storage_gb, p.extra_user_price,
+              p.included_app_count, p.extra_app_price, p.features, p.base_price_monthly, p.annual_months,
+              p.is_retired
          FROM subscriptions s JOIN plans p ON p.slug = s.plan_slug
         WHERE s.org_id = $1 AND s.status <> 'canceled'`,
       [orgId],
@@ -224,32 +253,37 @@ export async function subscriptionRoutes(app) {
     if (!subscription) return { data: null };
 
     const items = await db.rows(
-      `SELECT si.*, a.price_monthly, a.price_annual
-         FROM subscription_items si
-         LEFT JOIN app_prices a ON a.app_slug = si.app_slug
-        WHERE si.subscription_id = $1 AND si.removed_at IS NULL
-        ORDER BY si.added_at`,
+      `SELECT * FROM subscription_items
+        WHERE subscription_id = $1 AND removed_at IS NULL
+        ORDER BY added_at, app_slug`,
       [subscription.id],
     );
 
     const invoices = await db.rows(
-      `SELECT id, number, status, total, currency, period_start, period_end, due_at, paid_at, created_at
-         FROM invoices WHERE org_id = $1 ORDER BY created_at DESC LIMIT 12`,
+      `SELECT * FROM invoices WHERE org_id = $1 AND status <> 'void' ORDER BY created_at DESC LIMIT 24`,
       [orgId],
     );
 
+    const term = await priceSubscription(db, subscription);
     const daysLeft = subscription.trial_ends_at
       ? Math.ceil((new Date(subscription.trial_ends_at) - Date.now()) / 86_400_000)
       : null;
+    const open = invoices.filter((i) => i.status === 'open');
 
     return {
       data: {
         ...shape(subscription),
         plan_name: subscription.plan_name,
+        plan_retired: subscription.is_retired,
         included_users: subscription.included_users,
+        included_app_count: subscription.included_app_count,
+        extra_user_price: subscription.extra_user_price,
+        extra_app_price: subscription.extra_app_price,
+        base_price_monthly: subscription.base_price_monthly,
         storage_gb: subscription.storage_gb,
         plan_features: subscription.features,
         trial_days_left: daysLeft !== null && daysLeft > 0 ? daysLeft : 0,
+        term_quote: term,
         items: items.map((i) => ({
           id: i.id,
           app_slug: i.app_slug,
@@ -260,7 +294,15 @@ export async function subscriptionRoutes(app) {
           source: i.source,
           added_at: i.added_at,
         })),
-        invoices,
+        invoices: invoices.map(shapeInvoice),
+        amount_due: open.reduce((sum, i) => sum + Number(i.total), 0).toFixed(2),
+        next_due_invoice: open.length
+          ? shapeInvoice([...open].sort((a, b) => new Date(a.due_at) - new Date(b.due_at))[0])
+          : null,
+        payments: {
+          provider: razorpay.configured ? 'razorpay' : config.billingTestMode ? 'test' : null,
+          razorpay_key_id: razorpay.configured ? razorpay.keyId : null,
+        },
       },
     };
   });
@@ -277,53 +319,33 @@ export async function subscriptionRoutes(app) {
       const actorId = request.auth.userId;
       const slug = request.body.app_slug;
 
-      const subscription = await db.one(
-        `SELECT * FROM subscriptions WHERE org_id = $1 AND status <> 'canceled'`,
-        [orgId],
-      );
-      if (!subscription) throw badRequest('This workspace has no active subscription.');
-
       const definition = appBySlug(slug);
-      if (!definition) throw notFound('App');
+      if (!definition || definition.core) throw notFound('App');
       if (definition.status === 'coming_soon') {
         throw badRequest(`${definition.name} is not available yet.`);
       }
 
-      const chain = resolveDependencies([slug]);
-      const existing = new Set(
-        (
-          await db.rows(
-            `SELECT app_slug FROM subscription_items WHERE subscription_id = $1 AND removed_at IS NULL`,
-            [subscription.id],
-          )
-        ).map((r) => r.app_slug),
-      );
+      const result = await db.transaction(async (tx) => {
+        const subscription = await current(orgId, tx, true);
+        if (!subscription) throw badRequest('This workspace has no active subscription.');
 
-      const toAdd = chain.filter((s) => !existing.has(s));
-      if (!toAdd.length) throw badRequest(`${definition.name} is already on your subscription.`);
+        const existing = new Set((await subscribedApps(tx, subscription.id)).map((a) => a.slug));
+        const toAdd = resolveDependencies([slug]).filter((s) => s !== 'core' && !existing.has(s));
+        if (!toAdd.length) throw badRequest(`${definition.name} is already on your subscription.`);
+        releasedApps(toAdd);
 
-      const { plan, apps, included } = await loadPricing(subscription.plan_slug, toAdd);
-      const priced = quote({ plan, apps, seats: subscription.seats, cycle: subscription.billing_cycle });
-
-      await db.transaction(async (tx) => {
-        for (const appItem of apps) {
+        const before = await priceSubscription(tx, subscription);
+        for (const appSlug of toAdd) {
           await tx.query(
             `INSERT INTO subscription_items
                (id, org_id, subscription_id, app_slug, quantity, unit_price, billing_unit, source)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [
-              id('sit'), orgId, subscription.id, appItem.slug,
-              appItem.billing_unit === 'user' ? subscription.seats : 1,
-              included.has(appItem.slug)
-                ? 0
-                : subscription.billing_cycle === 'annual' ? appItem.price_annual : appItem.price_monthly,
-              appItem.billing_unit,
-              included.has(appItem.slug) ? 'plan' : 'addon',
-            ],
+             VALUES ($1, $2, $3, $4, 1, 0, 'org', 'addon')`,
+            [id('sit'), orgId, subscription.id, appSlug],
           );
         }
 
         await recomputeEntitlements(tx, orgId, { actorId });
+        const adjustment = await afterChange(tx, subscription.id, before, `Added ${toAdd.map((s) => appBySlug(s)?.name ?? s).join(', ')}`);
 
         tx.emit({
           type: EVENTS.SUBSCRIPTION_UPDATED,
@@ -331,16 +353,21 @@ export async function subscriptionRoutes(app) {
           actor_id: actorId,
           data: { action: 'app_added', app_slug: slug, also_added: toAdd.filter((s) => s !== slug) },
         });
+
+        const after = await priceSubscription(tx, { ...subscription });
+        return { toAdd, existing, adjustment, after };
       });
 
-      await catalog.provision(orgId, [...existing, ...toAdd], actorId);
+      await catalog.provision(orgId, [...result.existing, ...result.toAdd], actorId);
 
       return {
         data: {
-          added: toAdd,
-          // Charged from the next invoice; nothing is taken today.
-          added_to_next_invoice: priced.total,
+          added: result.toAdd,
           effective: 'immediately',
+          app_count: result.after.app_count,
+          extra_app_count: result.after.extra_app_count,
+          term_total: result.after.total,
+          adjustment_invoice: result.adjustment ? shapeInvoice(result.adjustment) : null,
         },
       };
     },
@@ -357,50 +384,42 @@ export async function subscriptionRoutes(app) {
       const actorId = request.auth.userId;
       const slug = request.params.slug;
 
-      const subscription = await db.one(
-        `SELECT * FROM subscriptions WHERE org_id = $1 AND status <> 'canceled'`,
-        [orgId],
-      );
-      if (!subscription) throw badRequest('This workspace has no active subscription.');
+      const remaining = await db.transaction(async (tx) => {
+        const subscription = await current(orgId, tx, true);
+        if (!subscription) throw badRequest('This workspace has no active subscription.');
 
-      const remaining = (
-        await db.rows(
-          `SELECT app_slug FROM subscription_items WHERE subscription_id = $1 AND removed_at IS NULL`,
-          [subscription.id],
-        )
-      ).map((r) => r.app_slug);
+        const slugs = (await subscribedApps(tx, subscription.id)).map((a) => a.slug);
+        if (!slugs.includes(slug)) throw notFound('Subscription item');
 
-      if (!remaining.includes(slug)) throw notFound('Subscription item');
+        // Do not strand an app that still needs this one.
+        const dependents = slugs.filter((other) => (appBySlug(other)?.dependencies ?? []).includes(slug));
+        if (dependents.length) {
+          throw badRequest(
+            `${dependents.map((d) => appBySlug(d)?.name ?? d).join(', ')} still ${
+              dependents.length === 1 ? 'needs' : 'need'
+            } this app. Remove ${dependents.length === 1 ? 'it' : 'them'} first.`,
+            { blocked_by: dependents },
+          );
+        }
 
-      // Do not strand an app that still needs this one.
-      const dependents = remaining.filter((other) =>
-        (appBySlug(other)?.dependencies ?? []).includes(slug),
-      );
-      if (dependents.length) {
-        throw badRequest(
-          `${dependents.map((d) => appBySlug(d)?.name ?? d).join(', ')} still ${
-            dependents.length === 1 ? 'needs' : 'need'
-          } this app. Remove ${dependents.length === 1 ? 'it' : 'them'} first.`,
-          { blocked_by: dependents },
-        );
-      }
-
-      await db.transaction(async (tx) => {
+        const before = await priceSubscription(tx, subscription);
         await tx.query(
           `UPDATE subscription_items SET removed_at = now()
             WHERE subscription_id = $1 AND app_slug = $2 AND removed_at IS NULL`,
           [subscription.id, slug],
         );
         await recomputeEntitlements(tx, orgId, { actorId });
+        await afterChange(tx, subscription.id, before, 'App removed');
         tx.emit({
           type: EVENTS.SUBSCRIPTION_UPDATED,
           org_id: orgId,
           actor_id: actorId,
           data: { action: 'app_removed', app_slug: slug },
         });
+        return slugs.filter((s) => s !== slug);
       });
 
-      await catalog.provision(orgId, remaining.filter((s) => s !== slug), actorId);
+      await catalog.provision(orgId, remaining, actorId);
 
       return { data: { removed: slug, data_retained_days: 30 } };
     },
@@ -423,49 +442,48 @@ export async function subscriptionRoutes(app) {
     async (request) => {
       const orgId = request.auth.orgId;
       const actorId = request.auth.userId;
+      const existing = await current(orgId);
+      if (!existing) throw badRequest('This workspace has no active subscription.');
 
-      const subscription = await db.one(
-        `SELECT * FROM subscriptions WHERE org_id = $1 AND status <> 'canceled'`,
-        [orgId],
-      );
-      if (!subscription) throw badRequest('This workspace has no active subscription.');
+      const plan = request.body.plan && request.body.plan !== existing.plan_slug
+        ? await offeredPlan(request.body.plan)
+        : await db.one(`SELECT * FROM plans WHERE slug = $1`, [existing.plan_slug]);
+      const seats = seatsFor(plan, request.body.seats ?? existing.seats);
 
-      const nextPlanSlug = request.body.plan ?? subscription.plan_slug;
-      const plan = await db.one(`SELECT * FROM plans WHERE slug = $1`, [nextPlanSlug]);
-      if (!plan) throw badRequest(`Unknown plan: ${nextPlanSlug}`);
-
-      const seats = request.body.seats ?? subscription.seats;
-      if (plan.max_users && seats > plan.max_users) {
-        throw badRequest(`The ${plan.name} plan supports up to ${plan.max_users} users.`);
+      // Fewer seats than people is not a saving, it is a lock-out.
+      if (seats < existing.seats) {
+        const used = await seatUsage(orgId);
+        if (seats < used) {
+          throw badRequest(
+            `${used} seats are in use (members and pending invitations). Remove people before reducing seats below that.`,
+            { code: 'seats_in_use', in_use: used },
+          );
+        }
       }
 
-      const currentItems = await db.rows(
-        `SELECT app_slug FROM subscription_items WHERE subscription_id = $1 AND removed_at IS NULL`, [subscription.id]);
-      const pricing = await loadPricing(nextPlanSlug, currentItems.map((item) => item.app_slug));
-      const nextCycle = request.body.cycle ?? subscription.billing_cycle;
-      const updated = await db.transaction(async (tx) => {
-        const row = await tx.one(
+      const { row, adjustment } = await db.transaction(async (tx) => {
+        const subscription = await current(orgId, tx, true);
+        const before = await priceSubscription(tx, subscription);
+        const updated = await tx.one(
           `UPDATE subscriptions
               SET plan_slug = $2, seats = $3, billing_cycle = $4,
                   cancel_at_period_end = COALESCE($5, cancel_at_period_end)
             WHERE id = $1 RETURNING *`,
           [
-            subscription.id, nextPlanSlug, seats,
+            subscription.id, plan.slug, seats,
             request.body.cycle ?? subscription.billing_cycle,
             request.body.cancel_at_period_end ?? null,
           ],
         );
 
-        for (const item of pricing.apps) {
-          await tx.query(
-            `UPDATE subscription_items SET quantity = $3, unit_price = $4, source = $5
-             WHERE subscription_id = $1 AND app_slug = $2 AND removed_at IS NULL`,
-            [subscription.id, item.slug, item.billing_unit === 'user' ? seats : 1,
-              pricing.included.has(item.slug) ? 0 : nextCycle === 'annual' ? item.price_annual : item.price_monthly,
-              pricing.included.has(item.slug) ? 'plan' : 'addon']);
-        }
-
         await recomputeEntitlements(tx, orgId, { actorId });
+
+        const charge = await afterChange(
+          tx,
+          subscription.id,
+          before,
+          plan.slug !== subscription.plan_slug ? `Changed to the ${plan.name} plan` : `Seats changed to ${seats}`,
+        );
 
         tx.emit({
           type: EVENTS.SUBSCRIPTION_UPDATED,
@@ -474,16 +492,16 @@ export async function subscriptionRoutes(app) {
           data: {
             action: 'plan_changed',
             from: subscription.plan_slug,
-            to: nextPlanSlug,
+            to: plan.slug,
             seats,
-            cycle: row.billing_cycle,
+            cycle: updated.billing_cycle,
           },
         });
 
-        return row;
+        return { row: updated, adjustment: charge };
       });
 
-      return { data: shape(updated) };
+      return { data: { ...shape(row), adjustment_invoice: adjustment ? shapeInvoice(adjustment) : null } };
     },
   );
 
@@ -497,13 +515,11 @@ export async function subscriptionRoutes(app) {
       const orgId = request.auth.orgId;
       const actorId = request.auth.userId;
 
-      const subscription = await db.one(
-        `SELECT * FROM subscriptions WHERE org_id = $1 AND status <> 'canceled'`,
-        [orgId],
-      );
+      const subscription = await current(orgId);
       if (!subscription) throw badRequest('This workspace has no active subscription.');
 
-      const immediate = request.body?.immediate ?? false;
+      // Nothing was paid for yet, so there is nothing to run out: end it now.
+      const immediate = (request.body?.immediate ?? false) || ['trialing', 'incomplete'].includes(subscription.status);
 
       const updated = await db.transaction(async (tx) => {
         const row = await tx.one(
@@ -514,6 +530,13 @@ export async function subscriptionRoutes(app) {
                   cancellation_reason = $3
             WHERE id = $1 RETURNING *`,
           [subscription.id, immediate, request.body?.reason ?? null],
+        );
+
+        // No renewal will be needed; an unpaid first term never will be either.
+        await tx.query(
+          `UPDATE invoices SET status = 'void', voided_at = now(), updated_at = now()
+            WHERE subscription_id = $1 AND status = 'open' AND kind IN ('subscription', 'renewal')`,
+          [subscription.id],
         );
 
         if (immediate) await recomputeEntitlements(tx, orgId, { actorId });
@@ -541,6 +564,26 @@ export async function subscriptionRoutes(app) {
           data_retained_days: 90,
         },
       };
+    },
+  );
+
+  /** Undo a scheduled cancellation while the paid term is still running. */
+  app.post(
+    '/subscriptions/current/resume',
+    { preHandler: [app.loadContext, requirePermission('billing.subscription.manage')] },
+    async (request) => {
+      const orgId = request.auth.orgId;
+      const row = await db.transaction(async (tx) => {
+        const subscription = await current(orgId, tx, true);
+        if (!subscription?.cancel_at_period_end) throw badRequest('Nothing to resume.');
+        const updated = await tx.one(
+          `UPDATE subscriptions SET cancel_at_period_end = false, canceled_at = NULL, cancellation_reason = NULL
+            WHERE id = $1 RETURNING *`,
+          [subscription.id],
+        );
+        return updated;
+      });
+      return { data: shape(row) };
     },
   );
 }

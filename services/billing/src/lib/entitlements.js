@@ -1,6 +1,8 @@
 import { EVENTS } from '@nexus/contracts/events';
 import { appBySlug } from '@nexus/contracts';
 
+const GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS ?? 3);
+
 /**
  * Rebuild the entitlement read-model for one workspace from its subscription.
  *
@@ -29,8 +31,11 @@ export async function recomputeEntitlements(tx, orgId, { actorId } = {}) {
     [subscription.id],
   );
 
-  // A canceled-but-not-yet-expired subscription keeps working to period end.
-  // A past-due one gets a grace window rather than an abrupt cut-off.
+  // Access follows payment. A trial runs to its end date; a paid term runs to
+  // its end plus a short grace window, so a renewal paid a day late does not
+  // lock anybody out; `past_due` keeps that same grace window and then stops.
+  // `incomplete` (no trial, not yet paid) unlocks nothing but the workspace.
+  const graceMs = GRACE_DAYS * 86_400_000;
   const status =
     subscription.status === 'trialing' ? 'trialing'
     : subscription.status === 'past_due' ? 'grace'
@@ -38,9 +43,11 @@ export async function recomputeEntitlements(tx, orgId, { actorId } = {}) {
     : 'expired';
 
   const expiresAt =
-    subscription.status === 'trialing' ? subscription.trial_ends_at : subscription.current_period_end;
+    subscription.status === 'trialing'
+      ? subscription.trial_ends_at
+      : new Date(new Date(subscription.current_period_end).getTime() + graceMs);
 
-  const slugs = ['core', ...items.map((i) => i.app_slug)];
+  const slugs = ['core', ...items.map((i) => i.app_slug).filter((slug) => slug !== 'core')];
 
   for (const slug of slugs) {
     const item = items.find((i) => i.app_slug === slug);
@@ -53,7 +60,9 @@ export async function recomputeEntitlements(tx, orgId, { actorId } = {}) {
       [
         orgId,
         slug,
-        slug === 'core' ? status : status,
+        // The workspace itself — settings, members, billing — never locks, so
+        // an unpaid customer can always reach the page that fixes it.
+        slug === 'core' ? (status === 'expired' ? 'active' : status) : status,
         item?.quantity ?? subscription.seats,
         item?.source ?? 'plan',
         slug === 'core' ? null : expiresAt,
@@ -68,7 +77,7 @@ export async function recomputeEntitlements(tx, orgId, { actorId } = {}) {
   );
 
   // Feature-level entitlements come from each entitled app's declared features.
-  const features = slugs.flatMap((slug) => appBySlug(slug)?.features ?? []);
+  const features = (status === 'expired' ? ['core'] : slugs).flatMap((slug) => appBySlug(slug)?.features ?? []);
   await tx.query(`DELETE FROM feature_entitlements WHERE org_id = $1`, [orgId]);
   if (features.length) {
     const values = features.map((_, i) => `($1, $${i + 2}, true)`).join(', ');

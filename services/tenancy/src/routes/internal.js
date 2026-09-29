@@ -2,6 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { id } from '@nexus/db-kit';
 import { requireInternal, notFound, badRequest, conflict } from '@nexus/service-kit';
 import { EVENTS } from '@nexus/contracts/events';
+import { assertSeatAvailable } from '../lib/seats.js';
+import { workspaceUrl } from '../lib/addresses.js';
 import { resolveMemberPermissions } from '../lib/permissions.js';
 import { acceptInvitation } from './invitations.js';
 
@@ -189,6 +191,8 @@ export async function internalRoutes(app) {
       if (member) throw conflict('That person is already a member of this workspace.');
     }
 
+    await assertSeatAvailable({ db, config: app.config, orgId, email });
+
     const raw = randomBytes(32).toString('base64url');
 
     const invitation = await db.transaction(async (tx) => {
@@ -209,7 +213,7 @@ export async function internalRoutes(app) {
         ],
       );
 
-      const org = await tx.one(`SELECT name FROM organizations WHERE id = $1`, [orgId]);
+      const org = await tx.one(`SELECT name, slug FROM organizations WHERE id = $1`, [orgId]);
 
       tx.emit({
         type: EVENTS.MEMBER_INVITED,
@@ -220,12 +224,13 @@ export async function internalRoutes(app) {
           email,
           org_name: org?.name,
           roles: roles.map((r) => r.name),
-          link: `${app.config.appUrl}/join?token=${raw}`,
+          message: message ?? null,
+          link: workspaceUrl(app.config, org?.slug, `/join?token=${raw}`),
           existing_user: Boolean(existingUser),
         },
       });
 
-      return created;
+      return { ...created, org_slug: org?.slug };
     });
 
     return {
@@ -235,7 +240,7 @@ export async function internalRoutes(app) {
         status: invitation.status,
         expires_at: invitation.expires_at,
         roles: roles.map((r) => ({ id: r.id, slug: r.slug, name: r.name })),
-        invite_link: `${app.config.appUrl}/join?token=${raw}`,
+        invite_link: workspaceUrl(app.config, invitation.org_slug, `/join?token=${raw}`),
       },
     };
   });

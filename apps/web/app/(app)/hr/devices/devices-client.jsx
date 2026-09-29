@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/primitives';
 import { date as fmtDate, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { publicApiUrl } from '@/lib/api-base';
 
 const KINDS = [
   { value: 'biometric', label: 'Fingerprint' },
@@ -27,7 +28,6 @@ const KINDS = [
   { value: 'manual', label: 'Manual terminal' },
 ];
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 export default function DevicesClient() {
   const toast = useToast();
@@ -306,7 +306,7 @@ export default function DevicesClient() {
       {revealed && (
         <KeyReveal
           reveal={revealed}
-          endpoint={`${API_BASE}/api${meta.endpoint ?? '/device-sync/punches'}`}
+          endpoint={publicApiUrl(meta.endpoint ?? '/device-sync/punches')}
           onClose={() => setRevealed(null)}
         />
       )}

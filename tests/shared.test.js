@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { workspace, invite, ok } from './helpers.js';
 import { recordEvent } from '../services/audit/src/lib/consumer.js';
 import { createDb } from '../packages/db-kit/src/index.js';
+import { databaseFor, loadRootEnv } from '../scripts/lib/services.js';
 
 async function eventually(read, predicate) {
   for (let i = 0; i < 40; i++) {
@@ -54,8 +55,9 @@ test('shared audit and task notification flows', async t => {
     assert.equal((await owner.call('/audit', 'POST', { event_type: 'fake' })).status, 404);
   });
   await t.test('redelivery is idempotent and database rejects mutation', async () => {
-    if (!process.env.PG_HOST) process.loadEnvFile('.env');
-    const db = createDb({ url: `postgres://${process.env.PG_USER}:${process.env.PG_PASSWORD}@${process.env.PG_HOST}:${process.env.PG_PORT}/nexus_audit`, appName: 'audit-regression' });
+    // The same database the running stack uses: Supabase schema or local database.
+    const { DATABASE_URL: url, DB_SCHEMA: schema } = databaseFor('audit', loadRootEnv());
+    const db = createDb({ url, schema: schema || undefined, max: 1, appName: 'audit-regression' });
     try {
       const event = await db.one('SELECT * FROM audit_events WHERE event_id=$1', [auditRow.event_id]);
       await recordEvent(db, { id: event.event_id, type: event.event_type, org_id: event.org_id, actor_id: event.actor_id, occurred_at: event.occurred_at, data: { task_id: task.id } });

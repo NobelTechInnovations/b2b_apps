@@ -14,6 +14,7 @@ import { useWorkspace } from '@/lib/workspace';
 import { Button } from '@/components/ui/button';
 import { Avatar, Badge, Kbd } from '@/components/ui/primitives';
 import { Menu, MenuItem, MenuDivider, MenuLabel } from '@/components/ui/menu';
+import { apexUrl, tenantUrl } from '@/lib/tenant';
 
 export function Topbar({ organizations = [], onOpenSearch }) {
   const router = useRouter();
@@ -25,12 +26,13 @@ export function Topbar({ organizations = [], onOpenSearch }) {
   async function switchOrg(orgId) {
     if (orgId === current?.id) return;
     await api.post('/auth/switch-org', { org_id: orgId });
-    window.location.href = '/dashboard';
+    // Each company lives at its own address; go there.
+    window.location.href = tenantUrl(organizations.find((o) => o.id === orgId)?.slug, '/dashboard');
   }
 
   async function signOut() {
     await api.post('/auth/logout').catch(() => {});
-    window.location.href = '/login';
+    window.location.href = apexUrl('/login');
   }
 
   const trialDaysLeft =
@@ -93,8 +95,8 @@ export function Topbar({ organizations = [], onOpenSearch }) {
       <div className="flex-1" />
 
       {trialDaysLeft !== null && (
-        <Link href="/settings/billing" className="hidden sm:block">
-          <Badge tone={trialDaysLeft <= 3 ? 'caution' : 'brand'} dot>
+        <Link href="/settings/billing" className="hidden shrink-0 whitespace-nowrap sm:block">
+          <Badge tone={trialDaysLeft <= 3 ? 'caution' : 'brand'} dot className="whitespace-nowrap">
             {trialDaysLeft === 0 ? 'Trial ended' : `${trialDaysLeft} days left in trial`}
           </Badge>
         </Link>

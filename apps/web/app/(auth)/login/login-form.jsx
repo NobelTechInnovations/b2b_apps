@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Mail, ArrowRight } from 'lucide-react';
@@ -8,6 +8,7 @@ import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input, PasswordInput, Field, Checkbox } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
+import { apexUrl, safePath, subdomainsEnabled, tenantFromHost, tenantUrl } from '@/lib/tenant';
 
 export default function LoginForm() {
   const router = useRouter();
@@ -18,6 +19,18 @@ export default function LoginForm() {
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState(null);
   const [loading, setLoading] = useState(false);
+  // On a company's own address, sign in to that company.
+  const [tenant, setTenant] = useState(null);
+  const [elsewhere, setElsewhere] = useState(null);
+
+  useEffect(() => {
+    const slug = tenantFromHost(window.location.host);
+    if (!slug) return;
+    api
+      .get(`/workspace-lookup/${slug}`, { redirectOnUnauthorized: false })
+      .then((r) => setTenant(r.data))
+      .catch(() => setTenant({ slug, missing: true }));
+  }, []);
 
   const set = (key) => (event) => {
     setForm((f) => ({ ...f, [key]: event.target.value }));
@@ -31,13 +44,30 @@ export default function LoginForm() {
     setErrors({});
 
     try {
-      const response = await api.post('/auth/login', form);
+      const response = await api.post('/auth/login', {
+        ...form,
+        ...(tenant?.id ? { org_id: tenant.id } : {}),
+      });
 
       if (response.data.needs_onboarding) {
-        router.push('/onboarding');
+        window.location.href = apexUrl('/onboarding');
         return;
       }
-      router.push(next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '/dashboard');
+
+      const org = response.data.organization;
+      if (tenant?.id && org?.id !== tenant.id) {
+        // Signed in fine — just not somebody this company has invited.
+        setElsewhere(org);
+        setLoading(false);
+        return;
+      }
+
+      const destination = safePath(next);
+      if (subdomainsEnabled() && org?.slug) {
+        window.location.href = tenantUrl(org.slug, destination);
+        return;
+      }
+      router.push(destination);
       router.refresh();
     } catch (error) {
       if (error instanceof ApiError) {
@@ -53,10 +83,28 @@ export default function LoginForm() {
 
   return (
     <div>
-      <h1 className="text-2xl font-semibold tracking-[-0.025em]">Welcome back</h1>
+      <h1 className="text-2xl font-semibold tracking-[-0.025em]">
+        {tenant?.name ? `Sign in to ${tenant.name}` : 'Welcome back'}
+      </h1>
       <p className="mt-1.5 text-md text-[var(--text-secondary)]">
-        Sign in to your workspace.
+        {tenant?.name ? `${tenant.slug} workspace` : 'Sign in to your workspace.'}
       </p>
+
+      {tenant?.missing && (
+        <Alert tone="caution" className="mt-5">
+          There is no workspace at this address. Check the link, or{' '}
+          <a className="font-medium underline" href={apexUrl('/login')}>sign in here</a>.
+        </Alert>
+      )}
+
+      {elsewhere && (
+        <Alert tone="caution" className="mt-5">
+          You are not a member of {tenant?.name}. Ask its owner for an invitation
+          {elsewhere?.slug ? (
+            <>, or <a className="font-medium underline" href={tenantUrl(elsewhere.slug, '/dashboard')}>go to {elsewhere.name}</a>.</>
+          ) : '.'}
+        </Alert>
+      )}
 
       {formError && (
         <Alert tone="critical" className="mt-5">
@@ -64,7 +112,7 @@ export default function LoginForm() {
         </Alert>
       )}
 
-      <form onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
+      <form method="post" onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
         <Field label="Work email" error={errors.email}>
           {(props) => (
             <Input

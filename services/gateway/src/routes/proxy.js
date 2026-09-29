@@ -39,6 +39,22 @@ export async function proxyRoutes(app) {
       'x-forwarded-for': request.ip,
     };
 
+    // Signing out through us: forget the session the moment it succeeds, so
+    // the cached "session is live" answer cannot outlast the logout.
+    if (prefix === 'auth' && request.method === 'POST' && ['logout', 'logout-all', 'change-password'].includes(rest[0])) {
+      const token = request.headers.authorization?.startsWith('Bearer ')
+        ? request.headers.authorization.slice(7)
+        : request.cookies?.nx_at;
+      const claims = token ? await app.peekToken(token) : null;
+      if (claims) {
+        reply.raw.once('finish', () => {
+          if (reply.raw.statusCode < 400) {
+            app.forgetSessions({ sessionId: claims.sid, userId: rest[0] === 'logout' ? null : claims.sub });
+          }
+        });
+      }
+    }
+
     // ── public: sign-in, sign-up, price lists ──────────────────────────────
     if (route.public) {
       return reply.from(`${upstream}${target}`, {

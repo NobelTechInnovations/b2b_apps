@@ -1,6 +1,6 @@
 'use client';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+import { API_BASE as API_URL } from './api-base';
 
 export class ApiError extends Error {
   constructor({ status, code, message, details, requestId }) {
@@ -47,7 +47,9 @@ export async function api(
   path,
   { method = 'GET', body, query, signal, retry = true, headers, redirectOnUnauthorized = true } = {},
 ) {
-  const url = new URL(`${API_URL}/api${path.startsWith('/') ? path : `/${path}`}`);
+  // Relative (same-origin /api) unless NEXT_PUBLIC_API_URL points elsewhere.
+  const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+  const url = new URL(`${API_URL}/api${path.startsWith('/') ? path : `/${path}`}`, base);
 
   if (query) {
     for (const [key, value] of Object.entries(query)) {

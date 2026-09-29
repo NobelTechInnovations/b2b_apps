@@ -7,7 +7,7 @@ const email = `review-${Date.now()}@nexus.test`, password = 'Nexus-review-2026!'
 ok(await client.call('/auth/register', 'POST', { email, password, name: 'Nexus Reviewer' }), 201);
 ok(await client.call('/organizations', 'POST', { name: 'Nexus Review Workspace', industry: 'Services', size_band: '11-50' }), 201);
 ok(await client.call('/auth/refresh', 'POST', {}));
-ok(await client.call('/subscriptions', 'POST', { plan: 'growth', app_slugs: ['crm', 'hr', 'payroll', 'documents', 'invoicing', 'tasks'], seats: 25, cycle: 'monthly' }), 201);
+ok(await client.call('/subscriptions', 'POST', { plan: 'business', app_slugs: ['crm', 'hr', 'payroll', 'documents', 'invoicing', 'tasks'], seats: 25, cycle: 'monthly' }), 201);
 const me = ok(await client.call('/me/workspace')).user.id;
 const project = ok(await client.call('/tasks/projects', 'POST', { name: 'Launch customer workspace', description: 'Review the connected sales, people and project workflows.', due_date: '2026-10-15' }), 201);
 const milestone = ok(await client.call(`/tasks/projects/${project.id}/milestones`, 'POST', { title: 'Pilot ready', due_date: '2026-10-01' }), 201);

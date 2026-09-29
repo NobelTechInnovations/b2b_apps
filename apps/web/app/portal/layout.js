@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { serverApi } from '@/lib/server-api';
+import { resolveTenant } from '@/lib/tenant-guard';
+import { WorkspaceGate } from '@/components/shell/workspace-gate';
 import { WorkspaceProvider } from '@/lib/workspace';
 import { ToastProvider } from '@/components/ui/toast';
 import { PortalShell } from './portal-shell';
@@ -23,6 +25,10 @@ export default async function PortalLayout({ children }) {
     const next = (await headers()).get('x-nexus-page') ?? '/dashboard';
     redirect(`/session-refresh?next=${encodeURIComponent(next)}`);
   }
+  // The company this address belongs to decides which workspace is shown.
+  const tenant = await resolveTenant(me.data);
+  if (!tenant.ok) return <WorkspaceGate switchTo={tenant.switchTo} noAccess={tenant.noAccess} />;
+
   if (workspace.data?.needs_onboarding) redirect('/onboarding');
 
   return (

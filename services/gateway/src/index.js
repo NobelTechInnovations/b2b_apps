@@ -77,6 +77,10 @@ if (bus) {
       if (event.org_id) authz.invalidate(event.org_id);
     });
   }
+  // A revoked session must stop working now, not when its cache entry expires.
+  await bus.subscribe(NAME, 'identity.session.revoked', async (event) => {
+    app.forgetSessions({ sessionId: event.data?.session_id, userId: event.data?.all ? event.data?.user_id : null });
+  });
 }
 
 app.get('/internal/cache-stats', { logLevel: 'silent', preHandler: app.verifyInternal }, async () => authz.stats());

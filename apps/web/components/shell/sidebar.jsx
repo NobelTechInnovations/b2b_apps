@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  LayoutDashboard, Store, Settings, ChevronDown, PanelLeftClose, PanelLeft, Plus,
+  LayoutDashboard, Store, Settings, ChevronDown, PanelLeftClose, PanelLeft, Plus, UserRound,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useWorkspace } from '@/lib/workspace';
@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
  */
 export function Sidebar({ collapsed, onToggle }) {
   const pathname = usePathname();
-  const { navigation, loading } = useWorkspace();
+  const { navigation, loading, workspace } = useWorkspace();
   const [expanded, setExpanded] = useState({});
 
   // Keep the section you are inside open, without fighting manual toggles.
@@ -141,6 +141,9 @@ export function Sidebar({ collapsed, onToggle }) {
       </div>
 
       <div className="border-t border-[var(--border-subtle)] p-2.5">
+        {workspace?.self_service && (
+          <NavLink href="/portal" icon={UserRound} label="My HR portal" active={pathname.startsWith('/portal')} collapsed={collapsed} />
+        )}
         <NavLink href="/apps" icon={Store} label="Browse apps" active={pathname.startsWith('/apps')} collapsed={collapsed} />
         <NavLink href="/settings" icon={Settings} label="Settings" active={pathname.startsWith('/settings')} collapsed={collapsed} />
 

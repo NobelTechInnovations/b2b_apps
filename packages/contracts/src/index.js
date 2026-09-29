@@ -11,6 +11,8 @@ export {
   allServices,
   resolveDependencies,
   dependentsOf,
+  pairedApps,
+  relatedApps,
 } from './apps.js';
 export { EVENTS, envelope, isKnownEvent } from './events.js';
 export {

@@ -26,13 +26,13 @@ export function ok(result, status = 200) {
   assert.equal(result.status, status, JSON.stringify(result));
   return result.data;
 }
-export async function workspace(apps) {
+export async function workspace(apps, { plan = 'business', seats = 25, cycle = 'monthly' } = {}) {
   const client = session(), stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const email = `regression-${stamp}@nexus.test`;
   ok(await client.call('/auth/register', 'POST', { email, password, name: 'Regression Owner' }), 201);
   ok(await client.call('/organizations', 'POST', { name: `Regression ${stamp}` }), 201);
   ok(await client.call('/auth/refresh', 'POST', {}));
-  ok(await client.call('/subscriptions', 'POST', { plan: 'growth', app_slugs: apps, seats: 25, cycle: 'monthly' }), 201);
+  ok(await client.call('/subscriptions', 'POST', { plan, app_slugs: apps, seats, cycle }), 201);
   return { client, stamp, email };
 }
 export async function invite(owner, role, stamp) {

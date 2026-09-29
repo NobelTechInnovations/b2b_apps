@@ -8,13 +8,19 @@ import { Button } from './button';
 
 export function Modal({ open, onClose, title, description, children, footer, size = 'md', className }) {
   const panelRef = useRef(null);
+  // Callers usually pass an inline `onClose`, which is a new function on every
+  // render. Depending on it re-ran the effect below on each keystroke: its
+  // cleanup handed focus back to the page and its setup re-focused the first
+  // field, so typing into anything but the first input kept losing focus.
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     if (!open) return undefined;
 
     const previouslyFocused = document.activeElement;
     const onKey = (event) => {
-      if (event.key === 'Escape') onClose?.();
+      if (event.key === 'Escape') closeRef.current?.();
       if (event.key !== 'Tab') return;
 
       // Keep focus inside the dialog while it is open.
@@ -48,7 +54,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
       document.body.style.overflow = overflow;
       previouslyFocused?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open || typeof document === 'undefined') return null;
 

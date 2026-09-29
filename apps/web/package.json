@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev --turbopack -p 3000",
+    "dev": "next dev --turbopack -p ${WEB_PORT:-3000}",
     "build": "NEXT_DIST_DIR=.next-build next build",
-    "start": "NEXT_DIST_DIR=.next-build next start -p 3000",
+    "start": "NEXT_DIST_DIR=.next-build next start -p ${PORT:-3000}",
     "lint": "next lint"
   },
   "dependencies": {

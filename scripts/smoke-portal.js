@@ -105,7 +105,7 @@ async function main() {
   await hr('/auth/refresh', { method: 'POST', body: {} });
   const sub = await hr('/subscriptions', {
     method: 'POST',
-    body: { plan: 'growth', app_slugs: ['hr', 'payroll'], seats: 25, cycle: 'monthly' },
+    body: { plan: 'business', app_slugs: ['hr', 'payroll'], seats: 25, cycle: 'monthly' },
   });
   check('subscribed to HR + Payroll', sub.status === 201, JSON.stringify(sub.body?.error ?? '').slice(0, 120));
   await settle();
@@ -524,7 +524,7 @@ async function main() {
   await outsider('/organizations', { method: 'POST', body: { name: `Other Tools ${stamp}` } });
   await outsider('/auth/refresh', { method: 'POST', body: {} });
   await outsider('/subscriptions', {
-    method: 'POST', body: { plan: 'growth', app_slugs: ['hr', 'payroll'], seats: 5, cycle: 'monthly' },
+    method: 'POST', body: { plan: 'business', app_slugs: ['hr', 'payroll'], seats: 5, cycle: 'monthly' },
   });
   await settle();
 

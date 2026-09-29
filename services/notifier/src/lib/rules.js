@@ -110,6 +110,15 @@ export const RULES = {
     link: `/tasks?task=${d.task_id}`,
   }] : []),
 
+  [EVENTS.BOARD_MEMBER_ADDED]: (d) => (d.user_id ? [{
+    kind: 'board.member_added',
+    app: 'tasks',
+    users: [d.user_id],
+    title: `You were added to the board “${d.name}”`,
+    body: d.role === 'viewer' ? 'You can view its tasks.' : 'You can add and update its tasks.',
+    link: `/tasks/board?project=${d.project_id}`,
+  }] : []),
+
   [EVENTS.TASK_COMPLETED]: (d) => (d.created_by ? [{
     kind: 'task.completed',
     app: 'tasks',

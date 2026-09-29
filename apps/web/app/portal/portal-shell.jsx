@@ -13,6 +13,7 @@ import { Avatar } from '@/components/ui/primitives';
 import { useTheme } from '@/lib/theme';
 import { cn } from '@/lib/cn';
 import { NotificationBell } from '@/components/shell/notification-bell';
+import { apexUrl } from '@/lib/tenant';
 
 const TABS = [
   { href: '/portal', label: 'Overview', icon: LayoutDashboard, exact: true },
@@ -33,7 +34,7 @@ export function PortalShell({ user, organizations, children }) {
 
   async function signOut() {
     try { await api.post('/auth/logout', {}); } catch { /* leaving anyway */ }
-    window.location.href = '/login';
+    window.location.href = apexUrl('/login');
   }
 
   return (

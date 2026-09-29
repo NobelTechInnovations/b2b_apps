@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowRight, ArrowLeft, Check, Building2, Users, Sparkles, Loader2, PartyPopper,
 } from 'lucide-react';
-import { APPS, APP_CATEGORIES, resolveDependencies } from '@nexus/contracts';
+import { APPS, APP_CATEGORIES, resolveDependencies, pairedApps, relatedApps } from '@nexus/contracts';
 import { cn } from '@/lib/cn';
 import { api, ApiError } from '@/lib/api';
 import { money } from '@/lib/format';
@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Field, Select } from '@/components/ui/input';
 import { Badge, Alert, Card } from '@/components/ui/primitives';
 import { Icon, tintFor } from '@/components/shell/icon';
+import { subdomainsEnabled, tenantUrl } from '@/lib/tenant';
 
 const INDUSTRIES = [
   'Software & IT', 'Manufacturing', 'Retail & E-commerce', 'Professional services',
@@ -47,28 +48,33 @@ const PRESETS = {
 
 const STEPS = ['Workspace', 'Your business', 'Choose apps', 'Pick a plan'];
 
-export default function OnboardingWizard({ user, plans, appPrices }) {
+const appName = (slug) => APPS.find((a) => a.slug === slug)?.name ?? slug;
+
+/** A preset plus whatever each of its apps pairs with. */
+const withPairs = (slugs) => [...new Set(slugs.flatMap((slug) => [slug, ...pairedApps(slug)]))];
+
+export default function OnboardingWizard({ user, plans, company = '' }) {
   const router = useRouter();
 
-  const [step, setStep] = useState(0);
+  // Arriving from sign-up with a company name skips straight to the business.
+  const [step, setStep] = useState(company ? 1 : 0);
+  const [paired, setPaired] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [quote, setQuote] = useState(null);
+  const [address, setAddress] = useState(null);
 
   const [form, setForm] = useState({
-    name: '',
+    name: company,
     industry: '',
-    size_band: '11-50',
+    size_band: '1-10',
     apps: [],
-    plan: 'growth',
+    // Apps the customer deliberately unticked are never re-added for them.
+    removed: [],
+    plan: plans[0]?.slug ?? 'basic',
     cycle: 'monthly',
-    seats: 10,
+    seats: plans[0]?.included_users ?? 10,
   });
-
-  const priceBySlug = useMemo(
-    () => new Map(appPrices.map((p) => [p.app_slug, p])),
-    [appPrices],
-  );
 
   // Dependencies are resolved as you pick, so the total never surprises anyone.
   const resolved = useMemo(() => {
@@ -83,19 +89,40 @@ export default function OnboardingWizard({ user, plans, appPrices }) {
 
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
 
-  const toggleApp = (slug) =>
+  function toggleApp(slug) {
+    if (form.apps.includes(slug)) {
+      setForm((f) => ({ ...f, apps: f.apps.filter((s) => s !== slug), removed: [...f.removed, slug] }));
+      setPaired(null);
+      return;
+    }
+    // Picking HR pre-selects Payroll, CRM pre-selects Invoicing… — unless the
+    // customer has already said no to it. Either stays one click from undone.
+    const partners = pairedApps(slug).filter((p) => !form.apps.includes(p) && !form.removed.includes(p));
     setForm((f) => ({
       ...f,
-      apps: f.apps.includes(slug) ? f.apps.filter((s) => s !== slug) : [...f.apps, slug],
+      apps: [...f.apps, slug, ...partners],
+      removed: f.removed.filter((s) => s !== slug),
     }));
+    setPaired(partners.length ? { slug, partners } : null);
+  }
 
   function chooseIndustry(industry) {
     setForm((f) => ({
       ...f,
       industry,
-      apps: f.apps.length ? f.apps : (PRESETS[industry] ?? []).filter(slug => APPS.some(app => app.slug === slug && app.status === 'available')),
+      apps: f.apps.length
+        ? f.apps
+        : withPairs((PRESETS[industry] ?? []).filter((slug) => APPS.some((app) => app.slug === slug && app.status === 'available'))),
     }));
   }
+
+  // The cheaper plan for this many seats, so nobody overpays by accident.
+  const cheapest = useMemo(() => {
+    const cost = (plan) =>
+      Number(plan.base_price_monthly) +
+      Math.max(0, form.seats - plan.included_users) * Number(plan.extra_user_price);
+    return [...plans].sort((a, b) => cost(a) - cost(b))[0]?.slug;
+  }, [plans, form.seats]);
 
   async function refreshQuote(next = form) {
     try {
@@ -132,29 +159,37 @@ export default function OnboardingWizard({ user, plans, appPrices }) {
     setError(null);
 
     try {
-      // 1 — the workspace itself
-      await api.post('/organizations', {
+      // 1 — the workspace itself, at its own <company>-<digits> address
+      const created = await api.post('/organizations', {
         name: form.name.trim(),
         industry: form.industry,
         size_band: form.size_band,
       });
+      const slug = created.data.organization.slug;
 
       // 2 — a token that carries the new organization
       await api.post('/auth/refresh', {});
 
       // 3 — the subscription, which is what actually grants the apps
-      await api.post('/subscriptions', {
+      const subscription = await api.post('/subscriptions', {
         plan: form.plan,
         app_slugs: form.apps,
         seats: form.seats,
         cycle: form.cycle,
       });
 
+      // No trial means the first term is paid before anything unlocks.
+      const landing = subscription.data.payment_required_now ? '/settings/billing' : '/dashboard';
       setStep(STEPS.length);
+      setAddress(subdomainsEnabled() ? tenantUrl(slug, '/') : null);
       setTimeout(() => {
-        router.push('/dashboard');
+        if (subdomainsEnabled()) {
+          window.location.href = tenantUrl(slug, landing);
+          return;
+        }
+        router.push(landing);
         router.refresh();
-      }, 1_400);
+      }, 1_600);
     } catch (err) {
       setError(
         err instanceof ApiError ? err.message : 'We could not finish setting up. Please try again.',
@@ -163,7 +198,7 @@ export default function OnboardingWizard({ user, plans, appPrices }) {
     }
   }
 
-  if (step === STEPS.length) return <Done name={form.name} />;
+  if (step === STEPS.length) return <Done name={form.name} address={address} />;
 
   return (
     <div className="min-h-screen bg-[var(--surface-page)]">
@@ -183,7 +218,9 @@ export default function OnboardingWizard({ user, plans, appPrices }) {
               form={form}
               toggleApp={toggleApp}
               autoAdded={autoAdded}
-              priceBySlug={priceBySlug}
+              paired={paired}
+              resolved={resolved}
+              plan={plans.find((p) => p.slug === form.plan) ?? plans[0]}
             />
           )}
           {step === 3 && (
@@ -193,6 +230,7 @@ export default function OnboardingWizard({ user, plans, appPrices }) {
               plans={plans}
               quote={quote}
               resolved={resolved}
+              cheapest={cheapest}
               onChange={(next) => refreshQuote({ ...form, ...next })}
             />
           )}
@@ -318,7 +356,7 @@ function StepBusiness({ form, set, onIndustry }) {
                 key={size.value}
                 onClick={() => {
                   set('size_band', size.value);
-                  set('seats', { '1-10': 5, '11-50': 25, '51-200': 60, '201-500': 150, '500+': 300 }[size.value]);
+                  set('seats', { '1-10': 10, '11-50': 25, '51-200': 60, '201-500': 150, '500+': 300 }[size.value]);
                 }}
                 className={cn(
                   'rounded-[var(--radius-lg)] border p-3 text-left transition-all duration-150',
@@ -341,23 +379,62 @@ function StepBusiness({ form, set, onIndustry }) {
   );
 }
 
-function StepApps({ form, toggleApp, autoAdded, priceBySlug }) {
+function StepApps({ form, toggleApp, autoAdded, paired, resolved, plan }) {
   const available = APPS.filter((a) => !a.core && a.status !== 'coming_soon');
+  const included = plan?.included_app_count ?? 5;
+  const extra = Math.max(0, resolved.length - included);
+  const hints = [...new Set(form.apps.flatMap((slug) => relatedApps(slug)))].filter((slug) => !resolved.includes(slug));
 
   return (
     <div>
       <h1 className="text-2xl font-semibold tracking-[-0.025em]">What do you want to manage?</h1>
       <p className="mt-1.5 text-md text-[var(--text-secondary)]">
-        Pick as many as you like. Every app shares the same people, customers and documents —
-        and you can add or drop any of them later.
+        Every plan includes any {included} apps. Apps that belong together are picked for you —
+        untick anything you don&apos;t need.
       </p>
 
+      <div className="sticky top-0 z-10 mt-5 flex flex-wrap items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-4 py-3 shadow-xs">
+        <span className="text-sm font-semibold tabular">{resolved.length} selected</span>
+        <span className="h-1.5 w-40 overflow-hidden rounded-full bg-[var(--surface-active)]">
+          <span
+            className={cn('block h-full rounded-full', extra ? 'bg-[var(--color-caution-500)]' : 'bg-[var(--color-brand-500)]')}
+            style={{ width: `${Math.min(100, (resolved.length / included) * 100)}%` }}
+          />
+        </span>
+        <span className="text-xs text-[var(--text-secondary)]">
+          {extra
+            ? `${included} included · ${extra} extra at ${money(plan?.extra_app_price ?? 99, 'INR')}/month each`
+            : `${included - resolved.length} more included at no extra cost`}
+        </span>
+      </div>
+
+      {paired && (
+        <Alert tone="info" className="mt-4" icon={Sparkles}>
+          Added <strong>{paired.partners.map(appName).join(', ')}</strong> because it works hand in hand with{' '}
+          {appName(paired.slug)}. Untick it if you don&apos;t need it.
+        </Alert>
+      )}
+
       {autoAdded.length > 0 && (
-        <Alert tone="info" className="mt-5" icon={Sparkles}>
+        <Alert tone="info" className="mt-4" icon={Sparkles}>
           We will also include{' '}
-          <strong>{autoAdded.map((s) => APPS.find((a) => a.slug === s)?.name).join(', ')}</strong>,
+          <strong>{autoAdded.map(appName).join(', ')}</strong>,
           because your selection depends on {autoAdded.length === 1 ? 'it' : 'them'}.
         </Alert>
+      )}
+
+      {hints.length > 0 && (
+        <p className="mt-4 text-sm text-[var(--text-secondary)]">
+          Works well with your picks:{' '}
+          {hints.map((slug, index) => (
+            <span key={slug}>
+              <button className="font-medium text-[var(--text-brand)] hover:underline" onClick={() => toggleApp(slug)}>
+                + {appName(slug)}
+              </button>
+              {index < hints.length - 1 ? ' · ' : ''}
+            </span>
+          ))}
+        </p>
       )}
 
       <div className="mt-6 space-y-7">
@@ -374,7 +451,7 @@ function StepApps({ form, toggleApp, autoAdded, priceBySlug }) {
                 {apps.map((app) => {
                   const selected = form.apps.includes(app.slug);
                   const auto = autoAdded.includes(app.slug);
-                  const price = priceBySlug.get(app.slug);
+                  const partners = pairedApps(app.slug);
 
                   return (
                     <button
@@ -402,11 +479,11 @@ function StepApps({ form, toggleApp, autoAdded, priceBySlug }) {
                         <span className="mt-0.5 block line-clamp-1 text-xs text-[var(--text-secondary)]">
                           {app.tagline}
                         </span>
-                        <span className="mt-1.5 block text-2xs text-[var(--text-tertiary)] tabular">
-                          {price
-                            ? `${money(price.price_monthly, price.currency)} / ${price.billing_unit} / month`
-                            : `${money(app.price.monthly, app.price.currency)} / ${app.price.per} / month`}
-                        </span>
+                        {partners.length > 0 && (
+                          <span className="mt-1.5 block text-2xs text-[var(--text-tertiary)]">
+                            Pairs with {partners.map(appName).join(', ')}
+                          </span>
+                        )}
                       </span>
 
                       <span
@@ -432,12 +509,15 @@ function StepApps({ form, toggleApp, autoAdded, priceBySlug }) {
   );
 }
 
-function StepPlan({ form, set, plans, quote, resolved, onChange }) {
+function StepPlan({ form, set, plans, quote, resolved, cheapest, onChange }) {
+  const trialDays = Number(plans.find((p) => p.slug === form.plan)?.trial_days ?? 0);
   return (
     <div>
       <h1 className="text-2xl font-semibold tracking-[-0.025em]">Pick a plan</h1>
       <p className="mt-1.5 text-md text-[var(--text-secondary)]">
-        Every plan starts with a 14-day free trial. No card needed today.
+        {trialDays > 0
+          ? `Every plan starts with a ${trialDays}-day free trial. Each term is then paid in advance.`
+          : 'Each term is paid in advance. Your apps switch on as soon as the first payment goes through.'}
       </p>
 
       <div className="mt-6 inline-flex rounded-[var(--radius-lg)] bg-[var(--surface-sunken)] p-0.5">
@@ -465,7 +545,7 @@ function StepPlan({ form, set, plans, quote, resolved, onChange }) {
         ))}
       </div>
 
-      <div className="mt-5 grid gap-3 md:grid-cols-3">
+      <div className="mt-5 grid gap-3 md:grid-cols-2">
         {plans.map((plan) => {
           const selected = form.plan === plan.slug;
           const price = form.cycle === 'annual' ? plan.base_price_annual : plan.base_price_monthly;
@@ -484,19 +564,17 @@ function StepPlan({ form, set, plans, quote, resolved, onChange }) {
                   : 'border-[var(--border-default)] bg-[var(--surface-raised)] hover:border-[var(--border-strong)]',
               )}
             >
-              {plan.slug === 'growth' && (
-                <Badge tone="brand" size="sm" className="absolute right-3 top-3">Popular</Badge>
+              {plan.slug === cheapest && plans.length > 1 && (
+                <Badge tone="positive" size="sm" className="absolute right-3 top-3">Best value for {form.seats} seats</Badge>
               )}
               <p className="text-md font-semibold">{plan.name}</p>
               <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{plan.tagline}</p>
 
               <p className="mt-3 text-xl font-semibold tabular tracking-[-0.02em]">
-                {Number(price) === 0 ? 'Free' : money(price, plan.currency)}
-                {Number(price) > 0 && (
-                  <span className="text-xs font-normal text-[var(--text-tertiary)]">
-                    {' '}/ {form.cycle === 'annual' ? 'year' : 'month'}
-                  </span>
-                )}
+                {money(price, plan.currency)}
+                <span className="text-xs font-normal text-[var(--text-tertiary)]">
+                  {' '}/ {form.cycle === 'annual' ? 'year' : 'month'} + GST
+                </span>
               </p>
 
               <ul className="mt-3 space-y-1.5">
@@ -514,7 +592,7 @@ function StepPlan({ form, set, plans, quote, resolved, onChange }) {
 
       <div className="mt-6 grid gap-4 md:grid-cols-[1fr_320px]">
         <Card className="p-4">
-          <Field label="How many people need access?" hint="You can add or remove seats at any time.">
+          <Field label="How many people need access?" hint="Seats beyond the plan's allowance are ₹259 each per month. Change them any time.">
             {(props) => (
               <Input
                 {...props}
@@ -522,7 +600,7 @@ function StepPlan({ form, set, plans, quote, resolved, onChange }) {
                 min={1}
                 value={form.seats}
                 onChange={(e) => {
-                  const seats = Math.max(1, Number(e.target.value) || 1);
+                  const seats = Math.max(1, Math.min(100000, Number(e.target.value) || 1));
                   set('seats', seats);
                   onChange({ seats });
                 }}
@@ -542,9 +620,9 @@ function StepPlan({ form, set, plans, quote, resolved, onChange }) {
               <>
                 {quote.lines.map((line) => (
                   <div key={line.slug} className="flex items-baseline justify-between gap-3 text-sm">
-                    <span className="min-w-0 truncate text-[var(--text-secondary)]">{line.label}</span>
+                    <span className="min-w-0 truncate text-[var(--text-secondary)]" title={line.detail}>{line.label}</span>
                     <span className="shrink-0 tabular">
-                      {line.amount === 0 ? 'Included' : money(line.amount, 'INR')}
+                      {Number(line.amount) === 0 ? 'Included' : money(line.amount, 'INR')}
                     </span>
                   </div>
                 ))}
@@ -579,8 +657,9 @@ function StepPlan({ form, set, plans, quote, resolved, onChange }) {
           <div className="border-t border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-4 py-3">
             <p className="flex items-start gap-1.5 text-xs text-[var(--text-secondary)]">
               <Sparkles className="mt-px size-3.5 shrink-0 text-[var(--color-brand-500)]" />
-              Free for 14 days. Nothing is charged until your trial ends, and you
-              can cancel from settings at any point.
+              {trialDays > 0
+                ? `Free for ${trialDays} days. Pay your first term before the trial ends — early payment never shortens it. Cancel from settings any time.`
+                : 'You pay the first term right after setup. Cancel from settings any time.'}
             </p>
           </div>
         </Card>
@@ -594,7 +673,7 @@ function StepPlan({ form, set, plans, quote, resolved, onChange }) {
   );
 }
 
-function Done({ name }) {
+function Done({ name, address }) {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center px-6 text-center">
       <div className="animate-pop flex size-14 items-center justify-center rounded-[var(--radius-2xl)] bg-[var(--color-positive-500)] text-white">
@@ -604,6 +683,11 @@ function Done({ name }) {
       <p className="mt-2 max-w-sm text-md text-[var(--text-secondary)]">
         Setting up your apps and taking you to your dashboard…
       </p>
+      {address && (
+        <p className="mt-3 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] px-3 py-1.5 font-mono text-sm">
+          {address.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+        </p>
+      )}
       <Loader2 className="mt-6 size-5 animate-spin text-[var(--text-tertiary)]" />
     </div>
   );

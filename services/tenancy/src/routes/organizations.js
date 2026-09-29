@@ -2,29 +2,24 @@ import { id } from '@nexus/db-kit';
 import { requirePermission, body, validate as v, badRequest, conflict, notFound, forbidden } from '@nexus/service-kit';
 import { EVENTS } from '@nexus/contracts/events';
 import { seedSystemRoles, bumpEpoch } from '../lib/permissions.js';
-
-const slugify = (text) =>
-  text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'workspace';
-
-const RESERVED = new Set([
-  'app', 'api', 'www', 'admin', 'settings', 'billing', 'support', 'help',
-  'docs', 'status', 'auth', 'login', 'signup', 'nexus', 'internal',
-]);
+import { RESERVED, candidateSlug, workspaceUrl } from '../lib/addresses.js';
 
 export async function organizationRoutes(app) {
-  const { db } = app;
+  const { db, config } = app;
 
-  async function uniqueSlug(base) {
-    let candidate = base;
-    let suffix = 1;
-    while (
-      RESERVED.has(candidate) ||
-      (await db.one(`SELECT 1 FROM organizations WHERE slug = $1 AND status <> 'archived'`, [candidate]))
-    ) {
-      candidate = `${base}-${++suffix}`;
-      if (suffix > 200) throw conflict('Could not derive a unique workspace address.');
+  /**
+   * `<company>-<digits>`, always — never the bare name, so nobody has to
+   * compete for "acme" and an address is not trivially guessable. The unique
+   * index is the final word; this just avoids needless collisions.
+   */
+  async function uniqueSlug(name) {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const candidate = candidateSlug(name, attempt);
+      if (RESERVED.has(candidate)) continue;
+      const taken = await db.one(`SELECT 1 FROM organizations WHERE slug = $1`, [candidate]);
+      if (!taken) return candidate;
     }
-    return candidate;
+    throw conflict('Could not derive a unique workspace address.');
   }
 
   // ═══════════════════════════════════════════ CREATE WORKSPACE (onboarding)
@@ -59,7 +54,7 @@ export async function organizationRoutes(app) {
         throw forbidden('You have reached the limit of 10 workspaces. Contact support to raise it.');
       }
 
-      const slug = await uniqueSlug(request.body.slug ? slugify(request.body.slug) : slugify(request.body.name));
+      const slug = await uniqueSlug(request.body.slug || request.body.name);
 
       const result = await db.transaction(async (tx) => {
         const org = await tx.one(
@@ -116,10 +111,28 @@ export async function organizationRoutes(app) {
 
       return reply.status(201).send({
         data: {
-          organization: serialize(result.org),
+          organization: { ...serialize(result.org), url: workspaceUrl(config, result.org.slug, '/dashboard') },
           member: { id: result.member.id, roles: ['owner'] },
         },
       });
+    },
+  );
+
+  /**
+   * Which company a subdomain belongs to — public, because the sign-in page on
+   * that subdomain needs it before anybody has signed in. It says only what
+   * the address itself already implies: the name and logo.
+   */
+  app.get(
+    '/workspace-lookup/:slug',
+    { schema: { params: { type: 'object', properties: { slug: { type: 'string', pattern: '^[a-z0-9-]{1,64}$' } }, required: ['slug'] } } },
+    async (request) => {
+      const org = await db.one(
+        `SELECT id, name, slug, logo_url FROM organizations WHERE slug = $1 AND status = 'active'`,
+        [request.params.slug],
+      );
+      if (!org) throw notFound('Workspace');
+      return { data: org };
     },
   );
 

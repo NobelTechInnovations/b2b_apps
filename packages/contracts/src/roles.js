@@ -52,8 +52,10 @@ export const SYSTEM_ROLES = [
      */
     slug: 'employee',
     name: 'Employee',
-    description: 'Their own payslips, attendance, leave and documents. Nothing else.',
-    grants: ['*.self.*'],
+    description: 'Their own payslips, attendance, leave and documents, plus the task boards they are added to.',
+    // Tasks are safe to grant here because boards carry their own membership:
+    // an employee sees only boards they were added to and their own to-dos.
+    grants: ['*.self.*', 'tasks.tasks.view', 'tasks.tasks.create', 'tasks.tasks.edit', 'tasks.projects.view', 'tasks.time.view', 'tasks.time.log'],
     denies: ['billing.*.*', 'core.*.*', 'catalog.*.*'],
     portal: true,
     protected: true,

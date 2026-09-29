@@ -9,7 +9,7 @@ import { auditRoutes } from './routes/audit.js';
 const name = 'audit';
 const db = createDb({ url: config.databaseUrl, appName: name });
 await runMigrations({ db, dir: path.join(path.dirname(fileURLToPath(import.meta.url)), '../migrations') });
-const bus = await createBus({ servers: config.natsUrl, name });
+const bus = await createBus({ servers: config.natsUrl, name, db });
 const app = await createService({ name, config, db, bus });
 await app.register(auditRoutes);
 await bus.subscribe('audit', '>', event => recordEvent(db, event));

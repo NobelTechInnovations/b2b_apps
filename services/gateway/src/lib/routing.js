@@ -18,10 +18,14 @@ const PLATFORM_ROUTES = [
   // the whole point of being invited. Its own prefix, because the gateway's
   // policy is per namespace and the rest of `invitations` needs a session.
   { prefix: 'invite',        service: 'tenancy',  public: true },
+  // A company subdomain's sign-in page names the company before sign-in.
+  { prefix: 'workspace-lookup', service: 'tenancy', public: true },
   { prefix: 'teams',         service: 'tenancy' },
   { prefix: 'apps',          service: 'catalog' },
   { prefix: 'plans',         service: 'billing',  public: true },
   { prefix: 'subscriptions', service: 'billing',  requiresOrg: false },
+  // Payment providers call in with no user; billing verifies their signature.
+  { prefix: 'billing-webhooks', service: 'billing', public: true },
   { prefix: 'files',         service: 'files' },
   { prefix: 'notifications', service: 'notifier' },
   { prefix: 'search',        service: 'search' },

@@ -1,4 +1,5 @@
 import { requireInternal, notFound, badRequest } from '@nexus/service-kit';
+import { announceRevoked } from '../lib/sessions.js';
 
 /**
  * Service-to-service surface. Never reachable from the internet — the gateway
@@ -59,6 +60,7 @@ export async function internalRoutes(app) {
           AND ($2::text IS NULL OR active_org_id = $2)`,
       [userId, orgId ?? null, reason],
     );
+    if (rowCount) await announceRevoked(db, { userId, all: true, reason });
     request.log.warn({ userId, orgId, count: rowCount, reason }, 'sessions revoked by internal call');
     return { data: { revoked: rowCount } };
   });

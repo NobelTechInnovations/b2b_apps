@@ -106,7 +106,7 @@ async function main() {
   await call('/auth/refresh', { method: 'POST', body: {} });
   const sub = await call('/subscriptions', {
     method: 'POST',
-    body: { plan: 'growth', app_slugs: ['documents', 'hr', 'crm'], seats: 25, cycle: 'monthly' },
+    body: { plan: 'business', app_slugs: ['documents', 'hr', 'crm'], seats: 25, cycle: 'monthly' },
   });
   check('subscribed', sub.status === 201, `status ${sub.status}`);
   await new Promise((r) => setTimeout(r, 1800));
@@ -284,7 +284,7 @@ async function main() {
   await call('/organizations', { method: 'POST', body: { name: `Other Docs ${stamp}` } });
   await call('/auth/refresh', { method: 'POST', body: {} });
   await call('/subscriptions', {
-    method: 'POST', body: { plan: 'growth', app_slugs: ['documents'], seats: 5, cycle: 'monthly' },
+    method: 'POST', body: { plan: 'business', app_slugs: ['documents'], seats: 5, cycle: 'monthly' },
   });
   await new Promise((r) => setTimeout(r, 1500));
 

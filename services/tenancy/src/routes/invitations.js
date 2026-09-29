@@ -2,6 +2,8 @@ import { id } from '@nexus/db-kit';
 import { createHash, randomBytes } from 'node:crypto';
 import { requirePermission, body, validate as v, notFound, badRequest, conflict } from '@nexus/service-kit';
 import { EVENTS } from '@nexus/contracts/events';
+import { assertSeatAvailable } from '../lib/seats.js';
+import { workspaceUrl } from '../lib/addresses.js';
 
 const hashToken = (raw) => createHash('sha256').update(raw).digest('hex');
 
@@ -66,6 +68,8 @@ export async function invitationRoutes(app) {
         if (member) throw conflict('That person is already a member of this workspace.');
       }
 
+      await assertSeatAvailable({ db, config, orgId, email });
+
       const raw = randomBytes(32).toString('base64url');
 
       const invitation = await db.transaction(async (tx) => {
@@ -87,7 +91,7 @@ export async function invitationRoutes(app) {
           ],
         );
 
-        const org = await tx.one(`SELECT name FROM organizations WHERE id = $1`, [orgId]);
+        const org = await tx.one(`SELECT name, slug FROM organizations WHERE id = $1`, [orgId]);
 
         tx.emit({
           type: EVENTS.MEMBER_INVITED,
@@ -99,13 +103,14 @@ export async function invitationRoutes(app) {
             org_name: org.name,
             invited_by: userId,
             inviter_name: request.ctx.email,
+            message: request.body.message ?? null,
             roles: roles.map((r) => r.name),
-            link: `${config.appUrl}/join?token=${raw}`,
+            link: workspaceUrl(config, org?.slug, `/join?token=${raw}`),
             existing_user: Boolean(existingUser),
           },
         });
 
-        return created;
+        return { ...created, org_slug: org?.slug };
       });
 
       return reply.status(201).send({
@@ -116,7 +121,7 @@ export async function invitationRoutes(app) {
           expires_at: invitation.expires_at,
           roles: roles.map((r) => ({ id: r.id, slug: r.slug, name: r.name })),
           // Returned once, for "copy invite link". Never stored in plaintext.
-          invite_link: `${config.appUrl}/join?token=${raw}`,
+          invite_link: workspaceUrl(config, invitation.org_slug, `/join?token=${raw}`),
         },
       });
     },

@@ -47,7 +47,7 @@ export default function ForgotPasswordPage() {
         Enter your email and we will send you a reset link.
       </p>
 
-      <form onSubmit={onSubmit} className="mt-6 space-y-4">
+      <form method="post" onSubmit={onSubmit} className="mt-6 space-y-4">
         <Field label="Work email">
           {(props) => (
             <Input

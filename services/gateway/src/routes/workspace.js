@@ -74,10 +74,15 @@ export async function workspaceRoutes(app) {
      * user: they have a workspace to use, and the portal is just one more
      * place they can go.
      */
+    // An employee added to task boards has a workspace to use (Tasks), so
+    // they get the shell, with the portal one link away.
     const portalOnly =
       !authorization.isOwner &&
       authorization.roles.length > 0 &&
-      authorization.roles.every((role) => PORTAL_ROLES.has(role));
+      authorization.roles.every((role) => PORTAL_ROLES.has(role)) &&
+      navigation.length === 0;
+    const selfService = [...authorization.permissions].some((permission) => permission.split('.')[1] === 'self')
+      && (installed.has('hr') || installed.has('payroll'));
 
     return {
       data: {
@@ -90,6 +95,7 @@ export async function workspaceRoutes(app) {
           portal_only: portalOnly,
         },
         portal_only: portalOnly,
+        self_service: selfService,
         needs_onboarding: false,
         subscription: entitlements.subscription,
         apps: [...entitlements.apps].filter((slug) => slug !== 'core'),

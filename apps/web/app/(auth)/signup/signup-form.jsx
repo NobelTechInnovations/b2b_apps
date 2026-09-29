@@ -1,14 +1,15 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Mail, User, ArrowRight, Check } from 'lucide-react';
+import { Mail, User, ArrowRight, Check, Building2, Phone } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input, PasswordInput, Field } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
 import { cn } from '@/lib/cn';
+import { tenantUrl, subdomainsEnabled } from '@/lib/tenant';
 
 /** Mirrors the server-side policy so the feedback is honest, not decorative. */
 function strength(password) {
@@ -25,7 +26,20 @@ export default function SignupForm() {
   const params = useSearchParams();
   const invitationToken = params.get('token');
 
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [form, setForm] = useState({ company: '', name: '', email: '', phone: '', password: '' });
+  // Arriving from an invitation: show whose it is and lock the invited address.
+  const [invitation, setInvitation] = useState(null);
+
+  useEffect(() => {
+    if (!invitationToken) return;
+    api
+      .get(`/invite/${encodeURIComponent(invitationToken)}`, { redirectOnUnauthorized: false })
+      .then((r) => {
+        setInvitation(r.data);
+        setForm((f) => ({ ...f, email: r.data.email }));
+      })
+      .catch(() => setFormError('This invitation has expired or was already used. Ask for a new one.'));
+  }, [invitationToken]);
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -43,13 +57,31 @@ export default function SignupForm() {
     setFormError(null);
     setErrors({});
 
+    if (!invitationToken && form.company.trim().length < 2) {
+      setErrors({ company: 'Enter your company name.' });
+      setLoading(false);
+      return;
+    }
+
     try {
+      const { company, phone, ...account } = form;
       const response = await api.post('/auth/register', {
-        ...form,
+        ...account,
+        ...(phone.trim() ? { phone: phone.trim() } : {}),
         ...(invitationToken ? { invitation_token: invitationToken } : {}),
       });
 
-      router.push(response.data.needs_onboarding ? '/onboarding' : '/dashboard');
+      if (response.data.needs_onboarding) {
+        // The company becomes the workspace; onboarding picks up from here.
+        router.push(`/onboarding?company=${encodeURIComponent(company.trim())}`);
+        return;
+      }
+      const org = response.data.organization;
+      if (subdomainsEnabled() && org?.slug) {
+        window.location.href = tenantUrl(org.slug, '/dashboard');
+        return;
+      }
+      router.push('/dashboard');
       router.refresh();
     } catch (error) {
       if (error instanceof ApiError) {
@@ -67,17 +99,40 @@ export default function SignupForm() {
   return (
     <div>
       <h1 className="text-2xl font-semibold tracking-[-0.025em]">
-        {invitationToken ? 'Accept your invitation' : 'Create your workspace'}
+        {invitationToken ? (invitation ? `Join ${invitation.organization.name}` : 'Accept your invitation') : 'Create your workspace'}
       </h1>
       <p className="mt-1.5 text-md text-[var(--text-secondary)]">
         {invitationToken
-          ? 'Set up your account to join the team.'
-          : 'Free for 14 days. No card required.'}
+          ? `Add your details to join${invitation?.title ? ` as ${invitation.title}` : ' the team'}.`
+          : 'Your company gets its own workspace address. Free for 14 days.'}
       </p>
 
       {formError && <Alert tone="critical" className="mt-5">{formError}</Alert>}
 
-      <form onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
+      <form method="post" onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
+        {!invitationToken && (
+          <Field
+            label="Company name"
+            error={errors.company}
+            hint="Your workspace gets its own address, like acme-4821 — the number keeps it unique."
+          >
+            {(props) => (
+              <Input
+                {...props}
+                name="organization"
+                autoComplete="organization"
+                placeholder="Acme Industries"
+                icon={Building2}
+                value={form.company}
+                onChange={set('company')}
+                error={errors.company}
+                required
+                autoFocus
+              />
+            )}
+          </Field>
+        )}
+
         <Field label="Full name" error={errors.name}>
           {(props) => (
             <Input
@@ -90,7 +145,7 @@ export default function SignupForm() {
               onChange={set('name')}
               error={errors.name}
               required
-              autoFocus
+              autoFocus={Boolean(invitationToken)}
             />
           )}
         </Field>
@@ -107,10 +162,29 @@ export default function SignupForm() {
               value={form.email}
               onChange={set('email')}
               error={errors.email}
+              readOnly={Boolean(invitation)}
               required
             />
           )}
         </Field>
+
+        {invitationToken && (
+          <Field label="Mobile number" error={errors.phone} hint="Optional. Your team can reach you on it.">
+            {(props) => (
+              <Input
+                {...props}
+                type="tel"
+                name="phone"
+                autoComplete="tel"
+                placeholder="+91 98765 43210"
+                icon={Phone}
+                value={form.phone}
+                onChange={set('phone')}
+                error={errors.phone}
+              />
+            )}
+          </Field>
+        )}
 
         <Field label="Password" error={errors.password}>
           {(props) => (

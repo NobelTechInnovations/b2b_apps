@@ -1,5 +1,6 @@
-import { connect, JSONCodec, AckPolicy, RetentionPolicy } from 'nats';
+import { connect, JSONCodec, AckPolicy, DeliverPolicy, RetentionPolicy } from 'nats';
 import { envelope, isKnownEvent } from '@nexus/contracts/events';
+import { createPgBus } from './pg-bus.js';
 
 const codec = JSONCodec();
 const STREAM = 'NEXUS';
@@ -12,7 +13,15 @@ const STREAM = 'NEXUS';
  * Consumers subscribe with a durable name and get at-least-once delivery;
  * handlers are expected to be idempotent on `event.id`.
  */
-export async function createBus({ servers, name, logger = console }) {
+export async function createBus({ servers, name, logger = console, db }) {
+  // BUS_DRIVER=postgres runs the bus on the platform database instead of NATS.
+  // The service's own pool is reused when given; otherwise BUS_DATABASE_URL.
+  if ((process.env.BUS_DRIVER ?? '').toLowerCase() === 'postgres') {
+    const url = process.env.BUS_DATABASE_URL ?? process.env.DATABASE_URL;
+    if (!db && !url) throw new Error('BUS_DRIVER=postgres needs BUS_DATABASE_URL or a database handle');
+    return createPgBus({ url, db, name, logger });
+  }
+
   const nc = await connect({
     servers,
     name,
@@ -79,7 +88,7 @@ export async function createBus({ servers, name, logger = console }) {
      *   subscribe('tasks', 'crm.deal.won', handler)
      *   subscribe('search', 'crm.*.*', handler)
      */
-    async subscribe(consumerName, pattern, handler, { maxDeliver = 5, ackWait = 30 } = {}) {
+    async subscribe(consumerName, pattern, handler, { maxDeliver = 5, ackWait = 30, from = 'all' } = {}) {
       const durable = `${consumerName}--${pattern.replace(/[.*>]/g, '_')}`;
 
       await jsm.consumers
@@ -87,6 +96,7 @@ export async function createBus({ servers, name, logger = console }) {
           durable_name: durable,
           filter_subject: `nexus.${pattern}`,
           ack_policy: AckPolicy.Explicit,
+          ...(from === 'new' ? { deliver_policy: DeliverPolicy.New } : {}),
           max_deliver: maxDeliver,
           ack_wait: ackWait * 1_000_000_000,
         })

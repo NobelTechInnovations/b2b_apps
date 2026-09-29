@@ -4,7 +4,8 @@ import OnboardingWizard from './wizard';
 
 export const metadata = { title: 'Set up your workspace' };
 
-export default async function OnboardingPage() {
+export default async function OnboardingPage({ searchParams }) {
+  const { company } = (await searchParams) ?? {};
   const [me, plans] = await Promise.all([
     serverApi('/auth/me'),
     serverApi('/plans'),
@@ -16,7 +17,7 @@ export default async function OnboardingPage() {
     <OnboardingWizard
       user={me.data?.user}
       plans={plans.data ?? []}
-      appPrices={plans.meta?.app_prices ?? []}
+      company={typeof company === 'string' ? company.slice(0, 120) : ''}
     />
   );
 }
