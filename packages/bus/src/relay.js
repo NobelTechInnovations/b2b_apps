@@ -1,4 +1,5 @@
 import { claimOutbox, markOutboxSent, outboxSignal } from '@nexus/db-kit';
+import { quietErrors } from './quiet.js';
 
 /**
  * Outbox relay.
@@ -13,6 +14,7 @@ export function startOutboxRelay({ db, bus, logger, intervalMs = Number(process.
   let timer;
   let busy = false;
   let again = false;
+  const fail = quietErrors(logger);
 
   async function tick() {
     if (!running) return;
@@ -37,7 +39,7 @@ export function startOutboxRelay({ db, bus, logger, intervalMs = Number(process.
         }
       }
     } catch (error) {
-      logger.error({ err: error }, 'outbox relay tick failed');
+      fail(error, 'outbox relay tick failed');
     } finally {
       busy = false;
       if (running) timer = setTimeout(tick, again ? 0 : intervalMs);

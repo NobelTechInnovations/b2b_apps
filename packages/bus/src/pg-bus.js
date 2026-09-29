@@ -1,5 +1,6 @@
 import { createDb } from '@nexus/db-kit';
 import { envelope, isKnownEvent } from '@nexus/contracts/events';
+import { quietErrors } from './quiet.js';
 
 /**
  * The platform event bus, on Postgres.
@@ -91,10 +92,12 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
   }
 
   const consumers = new Map();
+  const busy = new Set(); // durables with a run in flight
   let running = true;
   let timer = null;
   let lastOk = Date.now();
   let lastSweep = 0;
+  const fail = quietErrors(logger);
 
   const holder = `${name}:${process.pid}:${Math.random().toString(36).slice(2, 8)}`;
   const LEASE_MS = 60_000;
@@ -168,7 +171,9 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
   async function tick() {
     if (!running) return;
     try {
-      const list = [...consumers.values()].filter((c) => c.running);
+      // A consumer still working through an earlier batch sits this tick out;
+      // everyone else carries on.
+      const list = [...consumers.values()].filter((c) => c.running && !busy.has(c.durable));
       if (list.length) {
         const from = Math.min(...list.map((c) => c.seq));
         const events = await db.rows(
@@ -180,11 +185,22 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
         if (events.length) {
           const upTo = Number(events[events.length - 1].seq);
           const skipped = [];
+          const due = [];
           for (const consumer of list) {
-            if (!running) break;
             const relevant = events.some((e) => Number(e.seq) > consumer.seq && subjectMatches(consumer.pattern, e.type));
-            if (relevant) await runConsumer(consumer, events, upTo);
+            if (relevant) due.push(consumer);
             else if (consumer.seq < upTo) skipped.push(consumer);
+          }
+          // Consumers are independent durables, so each runs on its own and the
+          // poll loop never waits for one: a handler backing off on a failing
+          // email must not hold every in-app notification in the process
+          // behind it. Order within a consumer is unchanged, and `busy` keeps
+          // a consumer from being started again while it is still running.
+          for (const consumer of due) {
+            busy.add(consumer.durable);
+            runConsumer(consumer, events, upTo)
+              .catch((error) => fail(error, 'event bus consumer failed'))
+              .finally(() => busy.delete(consumer.durable));
           }
           if (skipped.length) {
             await db.query(
@@ -206,7 +222,7 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
       }
       lastOk = Date.now();
     } catch (error) {
-      logger.error?.({ err: error }, 'event bus poll failed');
+      fail(error, 'event bus poll failed');
     } finally {
       if (running) timer = setTimeout(tick, pollMs);
     }

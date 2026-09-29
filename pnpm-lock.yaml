@@ -92,6 +92,9 @@ importers:
       '@fastify/sensible':
         specifier: ^6.0.2
         version: 6.0.5
+      '@nexus/db-kit':
+        specifier: workspace:*
+        version: link:../db-kit
       ajv-formats:
         specifier: ^3.0.1
         version: 3.0.1(ajv@8.20.0)
@@ -206,6 +209,21 @@ importers:
       '@nexus/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@nexus/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+
+  services/helpdesk:
+    dependencies:
+      '@nexus/bus':
+        specifier: workspace:*
+        version: link:../../packages/bus
+      '@nexus/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@nexus/db-kit':
+        specifier: workspace:*
+        version: link:../../packages/db-kit
       '@nexus/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit

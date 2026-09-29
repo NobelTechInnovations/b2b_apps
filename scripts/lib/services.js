@@ -18,11 +18,13 @@ export const SERVICES = [
   { name: 'gateway', port: 4000, db: null, colour: 34 },
   // Business apps. Ports match the registry order the gateway derives.
   { name: 'tasks', port: 4034, db: 'tasks', colour: 91 },
+  { name: 'helpdesk', port: 4019, db: 'helpdesk', colour: 33 },
   { name: 'crm', port: 4010, db: 'crm', colour: 95 },
   { name: 'hr', port: 4030, db: 'hr', colour: 92 },
   { name: 'payroll', port: 4031, db: 'payroll', colour: 93 },
   { name: 'documents', port: 4036, db: 'documents', colour: 94 },
   { name: 'invoicing', port: 4022, db: 'invoicing', colour: 96 },
+  { name: 'erp', port: 4040, db: 'erp', colour: 33 },
 ];
 
 /** Parse a dotenv file without a dependency. Quotes are stripped. */

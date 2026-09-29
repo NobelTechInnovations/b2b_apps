@@ -36,14 +36,21 @@ const nextConfig = {
     return [{ source: '/api/:path*', destination: `${gateway}/api/:path*` }];
   },
   async headers() {
+    const common = [
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
+      { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+    ];
     return [
+      // Nothing in the workspace may be framed — clickjacking protection.
       {
-        source: '/:path*',
-        headers: [
-          { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-          { key: 'X-Frame-Options', value: 'DENY' },
-        ],
+        source: '/:path((?!f/).*)',
+        headers: [...common, { key: 'X-Frame-Options', value: 'DENY' }],
+      },
+      // Published forms are made to be embedded on a company's own website.
+      // They hold no session and act for nobody, so any site may frame them.
+      {
+        source: '/f/:token',
+        headers: [...common, { key: 'Content-Security-Policy', value: 'frame-ancestors *' }],
       },
     ];
   },

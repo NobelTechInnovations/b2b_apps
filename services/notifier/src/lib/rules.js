@@ -119,6 +119,110 @@ export const RULES = {
     link: `/tasks/board?project=${d.project_id}`,
   }] : []),
 
+  // ── helpdesk ──────────────────────────────────────────────────────────
+  // An unassigned ticket goes to whoever hands tickets out; an assigned one
+  // straight to its owner.
+  [EVENTS.TICKET_CREATED]: (d) => (d.assignee_id ? [] : [{
+    kind: 'ticket.created', app: 'helpdesk', users: { permission: 'helpdesk.tickets.assign' },
+    title: `New ticket #${d.number}: ${d.subject}`, body: d.priority === 'urgent' ? 'Urgent' : null,
+    link: `/helpdesk/tickets?ticket=${d.ticket_id}`,
+  }]),
+  [EVENTS.TICKET_ASSIGNED]: (d) => (d.assignee_id ? [{
+    kind: 'ticket.assigned', app: 'helpdesk', users: [d.assignee_id],
+    title: `Ticket #${d.number} assigned to you`, body: d.subject,
+    link: `/helpdesk/tickets?ticket=${d.ticket_id}`,
+  }] : []),
+  [EVENTS.TICKET_REPLIED]: (d) => (d.assignee_id ? [{
+    kind: 'ticket.replied', app: 'helpdesk', users: [d.assignee_id],
+    title: `${d.kind === 'note' ? 'Note' : 'Reply'} on ticket #${d.number}`, body: d.subject,
+    link: `/helpdesk/tickets?ticket=${d.ticket_id}`,
+  }] : []),
+  [EVENTS.TICKET_RESOLVED]: (d) => (d.created_by ? [{
+    kind: 'ticket.resolved', app: 'helpdesk', users: [d.created_by],
+    title: `Resolved: #${d.number} ${d.subject}`, body: null,
+    link: `/helpdesk/tickets?ticket=${d.ticket_id}`,
+  }] : []),
+
+  // ── recruitment ───────────────────────────────────────────────────────
+  [EVENTS.CANDIDATE_APPLIED]: (d) => [{
+    kind: 'candidate.applied', app: 'recruitment',
+    users: d.hiring_manager_id ? [d.hiring_manager_id] : { permission: 'recruitment.candidates.advance' },
+    title: `New applicant for ${d.job_title}: ${d.name}`,
+    body: d.source === 'careers_page' ? 'Applied through the careers page' : null,
+    link: `/recruitment?candidate=${d.candidate_id}`,
+  }],
+  [EVENTS.INTERVIEW_SCHEDULED]: (d) => [{
+    kind: 'interview.scheduled', app: 'recruitment', users: [d.interviewer_id],
+    title: `Interview with ${d.name} (${d.job_title})`, body: shortDate(d.scheduled_at),
+    link: `/recruitment/interviews`,
+  }],
+  [EVENTS.CANDIDATE_STAGE_CHANGED]: (d) => (d.owner_id ? [{
+    kind: 'candidate.stage', app: 'recruitment', users: [d.owner_id],
+    title: `${d.name} moved to ${d.to}`, body: d.job_title,
+    link: `/recruitment?candidate=${d.candidate_id}`,
+  }] : []),
+
+  // ── expenses ──────────────────────────────────────────────────────────
+  [EVENTS.EXPENSE_SUBMITTED]: (d) => [{
+    kind: 'expense.submitted', app: 'expenses', users: { permission: 'expenses.claims.approve' },
+    title: `Expense claim ${d.number} to approve: ₹${d.total}`, body: d.title,
+    link: `/expenses/approvals?claim=${d.claim_id}`,
+  }],
+  [EVENTS.EXPENSE_APPROVED]: (d) => [{
+    kind: 'expense.decided', app: 'expenses', users: [d.user_id],
+    title: `Your claim ${d.number} was approved`, body: `₹${d.total} · ${d.title}`,
+    link: `/expenses?claim=${d.claim_id}`,
+  }],
+  [EVENTS.EXPENSE_REJECTED]: (d) => [{
+    kind: 'expense.decided', app: 'expenses', users: [d.user_id],
+    title: `Your claim ${d.number} was rejected`, body: d.note ?? d.title,
+    link: `/expenses?claim=${d.claim_id}`,
+  }],
+  [EVENTS.EXPENSE_REIMBURSED]: (d) => [{
+    kind: 'expense.reimbursed', app: 'expenses', users: [d.user_id],
+    title: `₹${d.total} reimbursed for ${d.number}`, body: d.title,
+    link: `/expenses?claim=${d.claim_id}`,
+  }],
+
+  // ── forms ─────────────────────────────────────────────────────────────
+  [EVENTS.FORM_SUBMITTED]: (d) => [{
+    kind: 'form.submitted', app: 'surveys', users: [...new Set([d.created_by, d.lead_owner_id].filter(Boolean))],
+    title: `New response to ${d.form_name}`, body: d.contact_name ? `From ${d.contact_name}${d.lead_id ? ' · added to CRM leads' : ''}` : null,
+    link: `/surveys?form=${d.form_id}`,
+  }],
+
+  // ── operations ────────────────────────────────────────────────────────
+  [EVENTS.STOCK_LOW]: (d) => [{
+    kind: 'erp.stock_low', app: 'erp', users: { permission: 'erp.purchase.create' },
+    title: `Low stock: ${d.name}`, body: `${Number(d.on_hand).toLocaleString('en-IN')} left (reorder at ${Number(d.reorder_level).toLocaleString('en-IN')})`,
+    link: `/erp/products?open=${d.product_id}`,
+  }],
+  [EVENTS.PURCHASE_RECEIVED]: (d) => [{
+    kind: 'erp.received', app: 'erp', users: { permission: 'erp.purchase.approve' },
+    title: `${d.complete ? 'Received' : 'Part received'}: ${d.number} from ${d.vendor_name}`, body: `₹${d.value}`,
+    link: `/erp/purchase?order=${d.po_id}`,
+  }],
+  [EVENTS.QUALITY_CHECK_FAILED]: (d) => [{
+    kind: 'quality.failed', app: 'quality', users: { permission: 'quality.ncr.close' },
+    title: `${d.number} failed: ${d.product_name ?? 'product'}`, body: d.failed?.join(', ') ?? null,
+    link: `/quality?check=${d.check_id}`,
+  }],
+  [EVENTS.NCR_RAISED]: (d) => [{
+    kind: 'quality.ncr', app: 'quality', users: d.owner_id ? [d.owner_id] : { permission: 'quality.ncr.close' },
+    title: `${d.severity === 'critical' ? 'Critical ' : ''}non-conformance ${d.number}`, body: d.title,
+    link: `/quality/ncr?open=${d.ncr_id}`,
+  }],
+  [EVENTS.MAINTENANCE_REQUESTED]: (d) => [{
+    kind: 'maintenance.request', app: 'maintenance', users: d.assignee_id ? [d.assignee_id] : { permission: 'maintenance.requests.close' },
+    title: `${d.priority === 'urgent' ? 'Urgent: ' : ''}${d.equipment_name} — ${d.title}`, body: d.number,
+    link: `/maintenance/requests?open=${d.request_id}`,
+  }],
+  [EVENTS.STORE_ORDER_PLACED]: (d) => [{
+    kind: 'ecommerce.order', app: 'ecommerce', users: { permission: 'ecommerce.orders.edit' },
+    title: `New online order ${d.number}: ₹${d.total}`, body: d.customer_name,
+    link: `/ecommerce/orders?order=${d.order_id}`,
+  }],
+
   [EVENTS.TASK_COMPLETED]: (d) => (d.created_by ? [{
     kind: 'task.completed',
     app: 'tasks',

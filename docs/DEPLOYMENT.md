@@ -60,7 +60,8 @@ subdomain, and no CORS list has to know each company's address.
    | `REGISTER_PER_HOUR` | `10` |
    | `TRIAL_DAYS` | `14` (or `0` to take payment before anything unlocks) |
    | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` | from Razorpay |
-   | `SMTP_URL` / `MAIL_FROM` | your email provider |
+   | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | ZeptoMail: `smtp.zeptomail.in`, `587`, and the Mail Agent's SMTP user/password |
+   | `MAIL_FROM` | e.g. `FLP Worldwide <noreply@flpworldwide.com>` — a domain verified in ZeptoMail |
 
    Leave `BILLING_TEST_MODE` unset in production. Generate secrets with
    `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
@@ -90,7 +91,13 @@ with events `payment.captured` and `order.paid`, and the same secret as
 `RAZORPAY_WEBHOOK_SECRET`. The browser callback and the webhook both settle the
 invoice; settling is idempotent, so receiving both is safe.
 
-## 5. After the first deploy
+## 5. Importing Notion boards
+
+`scripts/import-notion.js` turns exported Notion task databases into private
+boards for a workspace owner (idempotent — safe to re-run). See the header of
+the script for the export format; `--dry-run` previews without writing.
+
+## 6. After the first deploy
 
 1. Open `https://yourdomain.com/signup`, create a company — you land on
    `https://<company>-<digits>.yourdomain.com/dashboard`.

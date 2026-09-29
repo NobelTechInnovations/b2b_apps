@@ -72,6 +72,83 @@ export const EVENTS = {
   TASK_COMPLETED: 'tasks.task.completed',
   BOARD_MEMBER_ADDED: 'tasks.board.member_added',
 
+  // ── helpdesk & knowledge ────────────────────────────────────────────────
+  TICKET_CREATED: 'helpdesk.ticket.created',
+  TICKET_ASSIGNED: 'helpdesk.ticket.assigned',
+  TICKET_REPLIED: 'helpdesk.ticket.replied',
+  TICKET_RESOLVED: 'helpdesk.ticket.resolved',
+  ARTICLE_PUBLISHED: 'knowledge.article.published',
+
+  // ── recruitment ─────────────────────────────────────────────────────────
+  CANDIDATE_APPLIED: 'recruitment.candidate.applied',
+  CANDIDATE_STAGE_CHANGED: 'recruitment.candidate.stage_changed',
+  INTERVIEW_SCHEDULED: 'recruitment.interview.scheduled',
+  CANDIDATE_HIRED: 'recruitment.candidate.hired',
+
+  // ── expenses ────────────────────────────────────────────────────────────
+  EXPENSE_SUBMITTED: 'expenses.claim.submitted',
+  EXPENSE_APPROVED: 'expenses.claim.approved',
+  EXPENSE_REJECTED: 'expenses.claim.rejected',
+  EXPENSE_REIMBURSED: 'expenses.claim.reimbursed',
+
+  // ── surveys & forms ─────────────────────────────────────────────────────
+  FORM_SUBMITTED: 'surveys.form.submitted',
+
+  // ── operations: inventory, manufacturing, quality, maintenance ──────────
+  PURCHASE_RECEIVED: 'erp.purchase.received',
+  STOCK_LOW: 'erp.stock.low',
+  MO_COMPLETED: 'manufacturing.order.completed',
+  QUALITY_CHECK_FAILED: 'quality.check.failed',
+  NCR_RAISED: 'quality.ncr.raised',
+  MAINTENANCE_REQUESTED: 'maintenance.request.created',
+
+  // ── commerce ────────────────────────────────────────────────────────────
+  POS_SALE_COMPLETED: 'pos.sale.completed',
+  POS_SALE_REFUNDED: 'pos.sale.refunded',
+  STORE_ORDER_PLACED: 'ecommerce.order.placed',
+  STORE_ORDER_DELIVERED: 'ecommerce.order.delivered',
+  STORE_ORDER_CANCELLED: 'ecommerce.order.cancelled',
+  SUBSCRIPTION_STARTED: 'recurring.subscription.started',
+  SUBSCRIPTION_CANCELLED: 'recurring.subscription.cancelled',
+
+  // ── finance ─────────────────────────────────────────────────────────────
+  PAYMENT_RECEIVED: 'billing.payment.received',
+  JOURNAL_POSTED: 'accounting.journal.posted',
+  ASSET_DEPRECIATED: 'assets.depreciation.posted',
+
+  // ── sales & marketing ───────────────────────────────────────────────────
+  QUOTE_APPROVAL_REQUESTED: 'quotes.quotation.approval_requested',
+  QUOTE_SENT: 'quotes.quotation.sent',
+  QUOTE_ACCEPTED: 'quotes.quotation.accepted',
+  QUOTE_DECLINED: 'quotes.quotation.declined',
+  ORDER_CONFIRMED: 'quotes.order.confirmed',
+  PARTNER_DEAL_REGISTERED: 'partners.deal.registered',
+  PARTNER_DEAL_APPROVED: 'partners.deal.approved',
+  CAMPAIGN_SENT: 'marketing.campaign.sent',
+  SOCIAL_POST_DUE: 'social.post.due',
+
+  // ── service ─────────────────────────────────────────────────────────────
+  FIELD_JOB_ASSIGNED: 'fieldservice.job.assigned',
+  FIELD_JOB_COMPLETED: 'fieldservice.job.completed',
+
+  // ── people ──────────────────────────────────────────────────────────────
+  COURSE_ASSIGNED: 'learning.course.assigned',
+  COURSE_COMPLETED: 'learning.course.completed',
+  DEVICE_ASSIGNED: 'devices.device.assigned',
+  DEVICE_RETURN_REQUESTED: 'devices.device.return_requested',
+
+  // ── collaboration & legal ───────────────────────────────────────────────
+  DISCUSS_MENTIONED: 'discuss.message.mentioned',
+  MEETING_INVITED: 'meetings.event.invited',
+  MEETING_BOOKED: 'meetings.booking.created',
+  ENVELOPE_SENT: 'sign.envelope.sent',
+  ENVELOPE_SIGNED: 'sign.envelope.signed',
+  ENVELOPE_COMPLETED: 'sign.envelope.completed',
+  CONTRACT_APPROVAL_REQUESTED: 'contracts.contract.approval_requested',
+  CONTRACT_APPROVED: 'contracts.contract.approved',
+  CONTRACT_EXPIRING: 'contracts.contract.expiring',
+  CONTROL_EVIDENCE_DUE: 'compliance.control.due',
+
   // ── platform ────────────────────────────────────────────────────────────
   FILE_UPLOADED: 'files.file.uploaded',
   NOTIFICATION_REQUESTED: 'notifier.notification.requested',

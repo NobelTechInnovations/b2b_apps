@@ -15,6 +15,25 @@
         "3100"
       ],
       "port": 3100
+    },
+    {
+      "name": "web-local",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "NEXT_PUBLIC_ROOT_DOMAIN=",
+        "ROOT_DOMAIN=",
+        "NEXT_DIST_DIR=.next-local",
+        "pnpm",
+        "--filter",
+        "@nexus/web",
+        "exec",
+        "next",
+        "dev",
+        "--turbopack",
+        "-p",
+        "3200"
+      ],
+      "port": 3200
     }
   ]
 }

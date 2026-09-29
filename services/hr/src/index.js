@@ -19,6 +19,7 @@ import { employeeDocumentRoutes } from './routes/documents.js';
 import { createWorkspace } from './lib/workspace.js';
 import { createTenancyClient } from './lib/tenancy-client.js';
 import { registerConsumers } from './lib/consumers.js';
+import { recruitmentRoutes } from './routes/recruitment.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NAME = 'hr';
@@ -52,6 +53,7 @@ await app.register(internalPeopleRoutes);
 await app.register(portalRoutes);
 await app.register(performanceRoutes);
 await app.register(employeeDocumentRoutes);
+await app.register(recruitmentRoutes);
 
 if (bus) {
   await registerConsumers({ bus, db, logger: app.log });

@@ -14,6 +14,10 @@ import { SERVICES, loadRootEnv, serviceEnv } from './lib/services.js';
 const ROOT = process.cwd();
 
 const base = loadRootEnv(ROOT);
+
+// If the terminal or log file cannot take more output (a full disk, a closed
+// pipe), keep the services running rather than dying on a log line.
+for (const stream of [process.stdout, process.stderr]) stream.on('error', () => {});
 const WEB = { name: 'web', port: Number(base.WEB_PORT ?? 3000), colour: 95 };
 const only = process.argv.slice(2);
 const children = [];

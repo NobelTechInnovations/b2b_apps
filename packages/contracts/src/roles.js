@@ -17,7 +17,9 @@ export const SYSTEM_ROLES = [
     slug: 'admin',
     name: 'Administrator',
     description: 'Manages people, roles and app settings. No billing access.',
-    grants: ['*.*.view', '*.*.create', '*.*.edit', '*.*.delete', '*.*.manage', '*.*.approve', '*.*.export', 'tasks.tasks.assign', 'tasks.time.log'],
+    // Every action of every app. Listing verbs one by one silently locked
+    // admins out of each new app's new actions.
+    grants: ['*.*.*'],
     denies: ['billing.*.*'],
     protected: true,
   },
@@ -25,8 +27,12 @@ export const SYSTEM_ROLES = [
     slug: 'member',
     name: 'Member',
     description: 'Day-to-day access to the apps they are assigned.',
-    grants: ['*.*.view', '*.*.create', '*.*.edit', 'tasks.time.log'],
-    denies: ['billing.*.*', '*.*.delete', 'core.settings.manage', 'core.roles.manage', 'catalog.apps.manage'],
+    grants: ['*.*.view', '*.*.create', '*.*.edit', 'tasks.time.log',
+      '*.*.send', '*.*.complete', '*.*.perform', '*.*.reply', '*.*.upload', '*.*.open', '*.*.close',
+      '*.*.log', '*.*.fulfil', '*.*.schedule', '*.*.confirm'],
+    denies: ['billing.*.*', '*.*.delete', 'core.settings.manage', 'core.roles.manage', 'catalog.apps.manage',
+      'marketing.campaigns.send', 'quality.ncr.close', 'iam.*.*', 'integrations.keys.*', 'integrations.webhooks.manage',
+      'accounting.journal.delete', 'devices.actions.wipe'],
     protected: true,
   },
   {
@@ -34,7 +40,7 @@ export const SYSTEM_ROLES = [
     name: 'Guest',
     description: 'Read-only access to explicitly shared records.',
     grants: ['*.*.view'],
-    denies: ['billing.*.*', 'core.*.*'],
+    denies: ['billing.*.*', 'core.*.*', 'iam.*.*', 'integrations.*.*', 'accounting.*.*', 'assets.*.*'],
     protected: true,
   },
   {
@@ -52,10 +58,14 @@ export const SYSTEM_ROLES = [
      */
     slug: 'employee',
     name: 'Employee',
-    description: 'Their own payslips, attendance, leave and documents, plus the task boards they are added to.',
+    description: 'Their own payslips, attendance, leave, documents and expense claims, plus the task boards they are added to.',
     // Tasks are safe to grant here because boards carry their own membership:
     // an employee sees only boards they were added to and their own to-dos.
-    grants: ['*.self.*', 'tasks.tasks.view', 'tasks.tasks.create', 'tasks.tasks.edit', 'tasks.projects.view', 'tasks.time.view', 'tasks.time.log'],
+    // Expenses are safe too: without approve/reimburse, a person only ever
+    // sees and edits their own claims.
+    grants: ['*.self.*', 'tasks.tasks.view', 'tasks.tasks.create', 'tasks.tasks.edit', 'tasks.projects.view', 'tasks.time.view', 'tasks.time.log',
+      'expenses.claims.view', 'expenses.claims.create', 'expenses.claims.edit',
+      'learning.courses.view', 'discuss.channels.view', 'discuss.messages.send', 'meetings.calendar.view'],
     denies: ['billing.*.*', 'core.*.*', 'catalog.*.*'],
     portal: true,
     protected: true,

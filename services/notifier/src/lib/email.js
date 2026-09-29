@@ -53,25 +53,45 @@ const TEMPLATES = {
   }),
 };
 
+export function smtpTransport(config) {
+  if (config.smtpUrl) return nodemailer.createTransport(config.smtpUrl);
+  if (!config.smtpHost) return null;
+  return nodemailer.createTransport({
+    host: config.smtpHost,
+    port: config.smtpPort,
+    // 465 is TLS from the first byte; 587 upgrades with STARTTLS, and we
+    // insist on it so credentials never cross the wire in the clear.
+    secure: config.smtpPort === 465,
+    requireTLS: config.smtpPort !== 465,
+    auth: config.smtpUser ? { user: config.smtpUser, pass: config.smtpPass } : undefined,
+  });
+}
+
+// Domains reserved for testing and documentation (RFC 2606 / RFC 6761). Mail
+// to them can only bounce, and bounces cost the sending domain its reputation,
+// so test runs and demo seeds are logged instead of handed to the provider.
+const RESERVED = /(^|\.)(test|example|invalid|localhost)$|(^|\.)example\.(com|net|org)$/i;
+
 export function createEmailSender({ config, db, logger }) {
-  const transport = config.smtpUrl ? nodemailer.createTransport(config.smtpUrl) : null;
-  if (!transport) logger.warn('SMTP_URL is not set — emails are written to the log instead of being sent');
+  const transport = smtpTransport(config);
+  if (!transport) logger.warn('SMTP is not configured — emails are written to the log instead of being sent');
 
   async function send({ eventId, to, template, data, orgId, occurredAt }) {
     const render = TEMPLATES[template];
     if (!render || !to) return;
     // A link that old has expired anyway; never mail stale history.
     if (occurredAt && Date.now() - new Date(occurredAt).getTime() > 24 * 3_600_000) return;
+    const deliver = transport && !RESERVED.test(to.split('@')[1] ?? '');
     // Claim the (event, address) first: a redelivery finds it taken and stops.
     const claimed = await db.one(
       `INSERT INTO emails (id, event_id, to_address, template, org_id, status)
        VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (event_id, to_address) DO NOTHING RETURNING id`,
-      [id('eml'), eventId, to.toLowerCase(), template, orgId ?? null, transport ? 'sent' : 'logged'],
+      [id('eml'), eventId, to.toLowerCase(), template, orgId ?? null, deliver ? 'sent' : 'logged'],
     );
     if (!claimed) return;
 
     const message = render(data ?? {});
-    if (!transport) {
+    if (!deliver) {
       logger.info(`\n  ✉  ${template} → ${to}\n     ${message.subject}\n     ${data?.link ?? ''}\n`);
       return;
     }
@@ -79,7 +99,15 @@ export function createEmailSender({ config, db, logger }) {
       const info = await transport.sendMail({ from: config.mailFrom, to, subject: message.subject, text: message.text, html: message.html });
       await db.query(`UPDATE emails SET provider_id = $2 WHERE id = $1`, [claimed.id, info.messageId ?? null]);
     } catch (error) {
-      // Release the claim so the bus retry can try again.
+      // A 5xx is the provider saying "never" — an unverified sender, a
+      // mailbox that does not exist. Retrying cannot help and only holds up
+      // the queue, so record why and move on.
+      if (error.responseCode >= 500 && error.responseCode < 600) {
+        await db.query(`UPDATE emails SET status = 'failed', error = $2 WHERE id = $1`, [claimed.id, String(error.response ?? error.message).slice(0, 500)]);
+        logger.error({ template, code: error.responseCode, response: error.response }, 'email rejected by the mail provider');
+        return;
+      }
+      // Anything else may pass on a retry: release the claim so it can.
       await db.query(`DELETE FROM emails WHERE id = $1`, [claimed.id]);
       throw error;
     }

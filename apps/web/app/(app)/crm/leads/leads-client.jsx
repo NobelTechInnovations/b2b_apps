@@ -73,6 +73,8 @@ export default function LeadsClient() {
   // in an effect or they silently do nothing.
   useEffect(() => {
     if (params.get('new') === '1') setCreating(true);
+    // From a form response or a notification: open that lead's panel.
+    if (params.get('open')) setSelected({ id: params.get('open'), name: 'Loading…' });
   }, [params]);
 
   const load = useCallback(async () => {

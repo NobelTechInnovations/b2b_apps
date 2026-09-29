@@ -16,7 +16,7 @@ const boardFields = {
   color: v.enum(['violet', 'indigo', 'blue', 'cyan', 'emerald', 'amber', 'orange', 'rose', 'slate']),
 };
 const BOARD_ROLES = ['owner', 'editor', 'viewer'];
-const sourcePaths = { 'crm.lead': 'crm/leads', 'crm.deal': 'crm/deals', 'hr.employee': 'hr/employees' };
+const sourcePaths = { 'crm.lead': 'crm/leads', 'crm.deal': 'crm/deals', 'hr.employee': 'hr/employees', 'helpdesk.ticket': 'helpdesk/tickets', 'recruitment.candidate': 'recruitment/candidates' };
 
 /**
  * Boards and tasks.
@@ -366,7 +366,7 @@ export async function taskRoutes(app) {
     return { data: await db.rows(`SELECT t.*,p.name AS project_name,p.color AS project_color FROM tasks t LEFT JOIN projects p ON p.org_id=t.org_id AND p.id=t.project_id
       WHERE ${clause} ORDER BY t.due_date NULLS LAST,t.created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values), meta: { total: total.n, page, limit, stats: total } };
   });
-  app.post('/tasks', { preHandler: guard('tasks.tasks.create'), schema: { body: body({ ...taskFields, parent_id: v.id('tsk'), source_app: v.enum(['crm', 'hr']), source_type: v.enum(['lead', 'deal', 'employee']), source_id: v.text(40) }, ['title']) } }, async (r, reply) => {
+  app.post('/tasks', { preHandler: guard('tasks.tasks.create'), schema: { body: body({ ...taskFields, parent_id: v.id('tsk'), source_app: v.enum(['crm', 'hr', 'helpdesk', 'recruitment']), source_type: v.enum(['lead', 'deal', 'employee', 'ticket', 'candidate']), source_id: v.text(40) }, ['title']) } }, async (r, reply) => {
     const b = { ...r.body };
     if (b.source_app || b.source_type || b.source_id) {
       const path = sourcePaths[`${b.source_app}.${b.source_type}`];

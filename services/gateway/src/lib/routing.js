@@ -20,6 +20,12 @@ const PLATFORM_ROUTES = [
   { prefix: 'invite',        service: 'tenancy',  public: true },
   // A company subdomain's sign-in page names the company before sign-in.
   { prefix: 'workspace-lookup', service: 'tenancy', public: true },
+  // Published forms and the careers page are for people with no account. The
+  // owning services accept only a public token or an open job there.
+  { prefix: 'public-forms',  service: 'crm',      public: true },
+  { prefix: 'careers',       service: 'hr',       public: true },
+  // The public storefront: published stores only, priced from the catalogue.
+  { prefix: 'store',         service: 'erp',      public: true },
   { prefix: 'teams',         service: 'tenancy' },
   { prefix: 'apps',          service: 'catalog' },
   { prefix: 'plans',         service: 'billing',  public: true },
@@ -94,19 +100,37 @@ const PLATFORM_PORTS = {
 
 const APP_PORT_BASE = 4010;
 
+/**
+ * Services that are built and deployed keep a fixed port. Deriving them from
+ * registry order meant that moving one app to another service (Knowledge into
+ * Helpdesk, say) silently shifted every port after it.
+ */
+export const SERVICE_PORTS = {
+  crm: 4010,
+  helpdesk: 4019,
+  invoicing: 4022,
+  hr: 4030,
+  payroll: 4031,
+  tasks: 4034,
+  documents: 4036,
+  erp: 4040,
+};
+
 export function resolveUpstreams(env = process.env) {
   const upstreams = {};
 
-  for (const [name, port] of Object.entries(PLATFORM_PORTS)) {
+  for (const [name, port] of Object.entries({ ...PLATFORM_PORTS, ...SERVICE_PORTS })) {
     upstreams[name] = `http://localhost:${port}`;
   }
 
-  // Registry order is stable, so a service keeps its port across restarts.
-  let offset = 0;
+  // Everything not yet built still gets a stable, unused port from registry order.
+  const taken = new Set(Object.values({ ...PLATFORM_PORTS, ...SERVICE_PORTS }));
+  let port = APP_PORT_BASE;
   for (const app of APPS) {
     if (upstreams[app.service]) continue;
-    upstreams[app.service] = `http://localhost:${APP_PORT_BASE + offset}`;
-    offset += 1;
+    while (taken.has(port)) port += 1;
+    upstreams[app.service] = `http://localhost:${port}`;
+    taken.add(port);
   }
 
   for (const name of Object.keys(upstreams)) {

@@ -10,6 +10,7 @@ import { peopleRoutes } from './routes/people.js';
 import { activityRoutes } from './routes/activities.js';
 import { overviewRoutes } from './routes/overview.js';
 import { internalImportRoutes } from './routes/internal-import.js';
+import { formRoutes } from './routes/forms.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NAME = 'crm';
@@ -30,6 +31,7 @@ await app.register(dealRoutes);
 await app.register(peopleRoutes);
 await app.register(activityRoutes);
 await app.register(internalImportRoutes);
+await app.register(formRoutes);
 
 if (bus) startOutboxRelay({ db, bus, logger: app.log });
 

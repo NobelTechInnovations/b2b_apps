@@ -320,23 +320,23 @@ export const APPS = [
     name: 'Surveys & Forms',
     tagline: 'Ask, and actually use the answers',
     description:
-      'Build forms and surveys, embed them anywhere, and route every response into the app that should act on it.',
+      'Build enquiry, registration and feedback forms, share one link anywhere, and see every response in a table — with enquiries turned into CRM leads automatically.',
     category: 'marketing',
     icon: 'ClipboardList',
     color: 'pink',
-    service: 'surveys',
+    // Hosted by the CRM service: a submission becomes a lead in one transaction.
+    service: 'crm',
     price: price(299),
-    highlights: ['Drag-drop builder', 'Conditional logic', 'Embed anywhere', 'Routes into CRM & Helpdesk'],
-    features: ['surveys.builder', 'surveys.responses', 'surveys.logic', 'surveys.routing'],
+    highlights: ['Drag-free form builder', 'Shareable public link', 'Responses become CRM leads', 'CSV export'],
+    features: ['surveys.forms', 'surveys.responses'],
     permissions: [
       'surveys.forms.view', 'surveys.forms.create', 'surveys.forms.edit', 'surveys.forms.delete',
       'surveys.responses.view', 'surveys.responses.export',
     ],
     nav: [
       { label: 'Forms', path: '/surveys', icon: 'ClipboardList', permission: 'surveys.forms.view' },
-      { label: 'Responses', path: '/surveys/responses', icon: 'MessageSquareReply', permission: 'surveys.responses.view' },
     ],
-    widgets: [{ id: 'surveys.recent', title: 'Recent responses', size: 'md', permission: 'surveys.responses.view' }],
+    widgets: [],
     dependencies: [],
   },
 
@@ -350,7 +350,7 @@ export const APPS = [
     category: 'commerce',
     icon: 'ShoppingBag',
     color: 'rose',
-    service: 'ecommerce',
+    service: 'erp',
     price: price(1199),
     flagship: true,
     highlights: ['Live inventory', 'Payment gateways', 'Abandoned-cart recovery', 'SEO-ready pages'],
@@ -380,7 +380,7 @@ export const APPS = [
     category: 'commerce',
     icon: 'Calculator',
     color: 'rose',
-    service: 'pos',
+    service: 'erp',
     price: price(899),
     highlights: ['Works offline', 'Barcode & scale ready', 'Split payments', 'Shift cash-up'],
     features: ['pos.registers', 'pos.sessions', 'pos.payments', 'pos.offline'],
@@ -430,32 +430,28 @@ export const APPS = [
     name: 'Helpdesk',
     tagline: 'Every customer issue, answered',
     description:
-      'Tickets, teams, agents, SLAs, canned responses and a customer portal — connected to the same customers your CRM already knows.',
+      'Tickets from phone, WhatsApp, email and walk-ins in one queue — with owners, priorities, replies and internal notes, and SLA timers that show what is about to breach.',
     category: 'service',
     icon: 'Headphones',
     color: 'orange',
     service: 'helpdesk',
     price: price(699),
     flagship: true,
-    highlights: ['SLA tracking', 'Customer portal', 'Canned responses', 'Satisfaction scores'],
-    features: ['helpdesk.tickets', 'helpdesk.teams', 'helpdesk.sla', 'helpdesk.portal', 'helpdesk.canned'],
+    highlights: ['SLA timers', 'Replies & internal notes', 'Assignment & queues', 'Tickets become tasks'],
+    features: ['helpdesk.tickets', 'helpdesk.sla'],
     permissions: [
       'helpdesk.tickets.view', 'helpdesk.tickets.create', 'helpdesk.tickets.edit',
       'helpdesk.tickets.delete', 'helpdesk.tickets.assign',
-      'helpdesk.teams.view', 'helpdesk.teams.manage', 'helpdesk.sla.manage', 'helpdesk.reports.view',
+      'helpdesk.sla.manage', 'helpdesk.reports.view',
     ],
     nav: [
       { label: 'Overview', path: '/helpdesk', icon: 'LayoutDashboard', permission: 'helpdesk.tickets.view' },
       { label: 'Tickets', path: '/helpdesk/tickets', icon: 'Ticket', permission: 'helpdesk.tickets.view' },
-      { label: 'My queue', path: '/helpdesk/queue', icon: 'Inbox', permission: 'helpdesk.tickets.view' },
-      { label: 'Teams', path: '/helpdesk/teams', icon: 'Users', permission: 'helpdesk.teams.view' },
       { label: 'SLA policies', path: '/helpdesk/sla', icon: 'Timer', permission: 'helpdesk.sla.manage' },
     ],
     widgets: [
       { id: 'helpdesk.open_tickets', title: 'Open tickets', size: 'sm', permission: 'helpdesk.tickets.view' },
       { id: 'helpdesk.sla_risk', title: 'SLA at risk', size: 'sm', permission: 'helpdesk.tickets.view' },
-      { id: 'helpdesk.csat', title: 'Satisfaction', size: 'sm', permission: 'helpdesk.reports.view' },
-      { id: 'helpdesk.volume', title: 'Ticket volume', size: 'lg', permission: 'helpdesk.reports.view' },
     ],
     dependencies: [],
   },
@@ -488,23 +484,24 @@ export const APPS = [
     slug: 'knowledge',
     name: 'Knowledge Base',
     tagline: 'The answers, written down once',
-    description: 'Spaces, articles, categories, an internal wiki and a public help centre.',
+    description:
+      'Articles organised by category, drafted and published by your team, searchable from one box — so the same question is answered the same way every time.',
     category: 'service',
-    icon: 'BookMarked',
+    icon: 'BookOpen',
     color: 'orange',
-    service: 'knowledge',
+    // Hosted by the helpdesk service: articles are what answer tickets.
+    service: 'helpdesk',
     price: price(299),
-    highlights: ['Internal wiki', 'Public help centre', 'Full-text search', 'Article analytics'],
-    features: ['knowledge.spaces', 'knowledge.articles', 'knowledge.public', 'knowledge.search'],
+    highlights: ['Draft & publish', 'Categories', 'Full-text search', 'Version by editor'],
+    features: ['knowledge.articles', 'knowledge.categories'],
     permissions: [
       'knowledge.articles.view', 'knowledge.articles.create', 'knowledge.articles.edit',
       'knowledge.articles.delete', 'knowledge.articles.publish', 'knowledge.spaces.manage',
     ],
     nav: [
-      { label: 'Spaces', path: '/knowledge', icon: 'Library', permission: 'knowledge.articles.view' },
-      { label: 'Articles', path: '/knowledge/articles', icon: 'FileType', permission: 'knowledge.articles.view' },
+      { label: 'Articles', path: '/knowledge', icon: 'BookOpen', permission: 'knowledge.articles.view' },
     ],
-    widgets: [{ id: 'knowledge.recent', title: 'Recently updated', size: 'md', permission: 'knowledge.articles.view' }],
+    widgets: [],
     dependencies: [],
   },
 
@@ -580,26 +577,26 @@ export const APPS = [
     name: 'Expenses',
     tagline: 'Claims without the paper chase',
     description:
-      'Snap a receipt, submit a claim, get it approved and reimbursed — posted straight to the ledger.',
+      'Staff file claims with receipts from their phone, managers approve or reject with a reason, finance marks them reimbursed — with category limits that flag overspending before it is approved.',
     category: 'finance',
-    icon: 'ReceiptIndianRupee',
+    icon: 'Receipt',
     color: 'cyan',
-    service: 'expenses',
+    // Hosted by the payroll service: reimbursements are money paid to people.
+    service: 'payroll',
     price: price(299),
-    highlights: ['Receipt capture', 'Approval chains', 'Mileage & per-diem', 'Posts to accounting'],
-    features: ['expenses.claims', 'expenses.approvals', 'expenses.policies', 'expenses.reimbursement'],
+    highlights: ['Receipts attached', 'Approval with reasons', 'Monthly category limits', 'Reimbursement tracking'],
+    features: ['expenses.claims', 'expenses.policies'],
     permissions: [
       'expenses.claims.view', 'expenses.claims.create', 'expenses.claims.edit',
       'expenses.claims.approve', 'expenses.claims.reimburse', 'expenses.policies.manage',
     ],
     nav: [
-      { label: 'My claims', path: '/expenses', icon: 'ReceiptIndianRupee', permission: 'expenses.claims.view' },
-      { label: 'To approve', path: '/expenses/approvals', icon: 'CheckCheck', permission: 'expenses.claims.approve' },
-      { label: 'Policies', path: '/expenses/policies', icon: 'Scale', permission: 'expenses.policies.manage' },
+      { label: 'My claims', path: '/expenses', icon: 'Receipt', permission: 'expenses.claims.view' },
+      { label: 'Approvals', path: '/expenses/approvals', icon: 'ClipboardCheck', permission: 'expenses.claims.approve' },
+      { label: 'Categories', path: '/expenses/categories', icon: 'Tags', permission: 'expenses.policies.manage' },
     ],
     widgets: [
-      { id: 'expenses.pending', title: 'Claims to approve', size: 'sm', permission: 'expenses.claims.approve' },
-      { id: 'expenses.mine', title: 'My open claims', size: 'md', permission: 'expenses.claims.view' },
+      { id: 'expenses.pending_approval', title: 'Claims to approve', size: 'sm', permission: 'expenses.claims.approve' },
     ],
     dependencies: [],
   },
@@ -657,6 +654,7 @@ export const APPS = [
       { label: 'Stock', path: '/erp/stock', icon: 'Warehouse', permission: 'erp.inventory.view' },
       { label: 'Purchase orders', path: '/erp/purchase', icon: 'ShoppingCart', permission: 'erp.purchase.view' },
       { label: 'Vendors', path: '/erp/vendors', icon: 'Truck', permission: 'erp.vendors.view' },
+      { label: 'Warehouses', path: '/erp/warehouses', icon: 'Building2', permission: 'erp.inventory.view' },
     ],
     widgets: [
       { id: 'erp.stock_value', title: 'Stock value', size: 'sm', permission: 'erp.inventory.view' },
@@ -674,7 +672,7 @@ export const APPS = [
     category: 'operations',
     icon: 'Factory',
     color: 'amber',
-    service: 'manufacturing',
+    service: 'erp',
     price: price(1499),
     highlights: ['Multi-level BOMs', 'Work-centre capacity', 'Material backflush', 'Scrap & yield'],
     features: ['mfg.bom', 'mfg.orders', 'mfg.workcenters', 'mfg.planning', 'mfg.quality'],
@@ -702,7 +700,7 @@ export const APPS = [
     category: 'operations',
     icon: 'BadgeCheck',
     color: 'amber',
-    service: 'quality',
+    service: 'erp',
     price: price(499),
     features: ['quality.plans', 'quality.checks', 'quality.ncr', 'quality.capa'],
     permissions: [
@@ -711,8 +709,9 @@ export const APPS = [
       'quality.plans.manage',
     ],
     nav: [
-      { label: 'Checks', path: '/quality', icon: 'BadgeCheck', permission: 'quality.checks.view' },
+      { label: 'Checks', path: '/quality', icon: 'ClipboardCheck', permission: 'quality.checks.view' },
       { label: 'Non-conformance', path: '/quality/ncr', icon: 'TriangleAlert', permission: 'quality.ncr.view' },
+      { label: 'Inspection plans', path: '/quality/plans', icon: 'ListChecks', permission: 'quality.plans.manage' },
     ],
     widgets: [],
     dependencies: ['erp'],
@@ -727,7 +726,7 @@ export const APPS = [
     category: 'operations',
     icon: 'Wrench',
     color: 'amber',
-    service: 'maintenance',
+    service: 'erp',
     price: price(499),
     features: ['maintenance.equipment', 'maintenance.preventive', 'maintenance.requests'],
     permissions: [
@@ -826,13 +825,14 @@ export const APPS = [
     name: 'Recruitment',
     tagline: 'From job post to joining date',
     description:
-      'Job postings, a candidate pipeline, interview scheduling, scorecards and offers that become employees in one click.',
+      'Job openings, a public careers page, a candidate pipeline, interviews with feedback, and offers — and one click turns the accepted candidate into an employee in HR.',
     category: 'people',
     icon: 'UserPlus',
     color: 'emerald',
-    service: 'recruitment',
+    // Hosted by the HR service: a hire becomes an employee in one transaction.
+    service: 'hr',
     price: price(599),
-    highlights: ['Careers page', 'Kanban candidate pipeline', 'Interview scorecards', 'One-click hire'],
+    highlights: ['Careers page', 'Kanban candidate pipeline', 'Interview feedback', 'One-click hire into HR'],
     features: ['recruitment.jobs', 'recruitment.candidates', 'recruitment.interviews', 'recruitment.offers'],
     permissions: [
       'recruitment.jobs.view', 'recruitment.jobs.manage',
@@ -841,10 +841,13 @@ export const APPS = [
     ],
     nav: [
       { label: 'Pipeline', path: '/recruitment', icon: 'Kanban', permission: 'recruitment.candidates.view' },
-      { label: 'Job postings', path: '/recruitment/jobs', icon: 'Briefcase', permission: 'recruitment.jobs.view' },
-      { label: 'Offers', path: '/recruitment/offers', icon: 'FileSignature', permission: 'recruitment.offers.view' },
+      { label: 'Job openings', path: '/recruitment/jobs', icon: 'Briefcase', permission: 'recruitment.jobs.view' },
+      { label: 'Interviews', path: '/recruitment/interviews', icon: 'CalendarClock', permission: 'recruitment.candidates.view' },
     ],
-    widgets: [{ id: 'recruitment.open_roles', title: 'Open roles', size: 'sm', permission: 'recruitment.jobs.view' }],
+    widgets: [
+      { id: 'recruitment.open_roles', title: 'Open roles', size: 'sm', permission: 'recruitment.jobs.view' },
+      { id: 'recruitment.new_candidates', title: 'New applicants', size: 'sm', permission: 'recruitment.candidates.view' },
+    ],
     dependencies: ['hr'],
   },
   {
@@ -1233,7 +1236,11 @@ export const APPS = [
 ];
 
 // Release availability is explicit: catalogue descriptions are not shipped services.
-const RELEASED_APPS = new Set(['core', 'crm', 'hr', 'payroll', 'documents', 'invoicing', 'tasks']);
+const RELEASED_APPS = new Set([
+  'core', 'crm', 'hr', 'payroll', 'documents', 'invoicing', 'tasks',
+  'helpdesk', 'knowledge', 'recruitment', 'expenses', 'surveys',
+  'erp', 'manufacturing', 'quality', 'maintenance', 'pos', 'ecommerce',
+]);
 for (const app of APPS) app.status = RELEASED_APPS.has(app.slug) ? 'available' : 'coming_soon';
 
 /**
@@ -1242,10 +1249,14 @@ for (const app of APPS) app.status = RELEASED_APPS.has(app.slug) ? 'available' :
  * Unlike `dependencies`, none of this is enforced.
  */
 const PAIRINGS = {
-  hr: { autoSelect: ['payroll'], related: ['tasks', 'documents', 'recruitment'] },
+  hr: { autoSelect: ['payroll'], related: ['tasks', 'recruitment', 'expenses'] },
   payroll: { autoSelect: [], related: ['hr', 'documents'] },
-  recruitment: { autoSelect: [], related: ['hr'] },
-  crm: { autoSelect: ['invoicing'], related: ['tasks', 'quotes', 'marketing'] },
+  recruitment: { autoSelect: [], related: ['hr', 'documents'] },
+  crm: { autoSelect: ['invoicing'], related: ['tasks', 'surveys', 'helpdesk'] },
+  helpdesk: { autoSelect: ['knowledge'], related: ['crm', 'tasks'] },
+  knowledge: { autoSelect: [], related: ['helpdesk'] },
+  expenses: { autoSelect: [], related: ['payroll', 'hr'] },
+  surveys: { autoSelect: [], related: ['crm'] },
   invoicing: { autoSelect: [], related: ['crm', 'accounting'] },
   tasks: { autoSelect: [], related: ['documents', 'crm', 'hr'] },
   documents: { autoSelect: [], related: ['tasks', 'hr'] },

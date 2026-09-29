@@ -1,3 +1,4 @@
+import { appBySlug } from '@nexus/contracts';
 import { serverApi } from '@/lib/server-api';
 import DashboardClient from './dashboard-client';
 
@@ -12,7 +13,8 @@ export default async function DashboardPage() {
   // Widget data comes from whichever apps the workspace actually has, in
   // parallel. A slow or missing app degrades its own tiles, not the page.
   const apps = workspace.data?.apps ?? [];
-  const widgetSources = ['crm', 'hr', 'tasks'].filter((slug) => apps.includes(slug));
+  // Every app that declares widgets serves them at /<app>/widgets.
+  const widgetSources = apps.filter((slug) => appBySlug(slug)?.widgets?.length);
 
   const widgetResults = await Promise.all(
     widgetSources.map(async (slug) => {

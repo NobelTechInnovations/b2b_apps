@@ -10,6 +10,7 @@ import { structureRoutes } from './routes/structures.js';
 import { salaryRoutes } from './routes/salaries.js';
 import { runRoutes } from './routes/runs.js';
 import { payslipRoutes } from './routes/payslips.js';
+import { expenseRoutes } from './routes/expenses.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NAME = 'payroll';
@@ -39,6 +40,7 @@ await app.register(structureRoutes);
 await app.register(salaryRoutes);
 await app.register(runRoutes);
 await app.register(payslipRoutes);
+await app.register(expenseRoutes);
 
 if (bus) startOutboxRelay({ db, bus, logger: app.log });
 
