@@ -10,6 +10,7 @@ import { qualityRoutes } from './routes/quality.js';
 import { maintenanceRoutes } from './routes/maintenance.js';
 import { posRoutes } from './routes/pos.js';
 import { storeRoutes } from './routes/store.js';
+import { internalRoutes } from './routes/internal.js';
 
 /**
  * Operations and commerce: Inventory & Purchasing, Manufacturing, Quality,
@@ -34,6 +35,7 @@ await app.register(qualityRoutes);
 await app.register(maintenanceRoutes);
 await app.register(posRoutes);
 await app.register(storeRoutes);
+await app.register(internalRoutes);
 
 if (bus) {
   const relay = startOutboxRelay({ db, bus, logger: app.log });

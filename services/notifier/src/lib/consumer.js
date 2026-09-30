@@ -7,7 +7,7 @@ import { RULES } from './rules.js';
  * Delivery is at-least-once, so a unique index on (event_id, user_id) makes
  * every insert idempotent: a redelivered event notifies nobody twice.
  */
-export function registerConsumer({ bus, db, tenancy, logger }) {
+export async function registerConsumer({ bus, db, tenancy, logger }) {
   async function recipients(orgId, users) {
     if (Array.isArray(users)) return users;
     if (users?.permission) return tenancy.holders(orgId, users.permission);
@@ -44,9 +44,11 @@ export function registerConsumer({ bus, db, tenancy, logger }) {
     }
   }
 
-  return Promise.all(
-    Object.keys(RULES).map((type) => bus.subscribe('notifier', type, handle)),
-  );
+  // One at a time: dozens of subscriptions at once queue on a two-connection
+  // pool, and at a cold start that queue can outlast the connect timeout.
+  const subscriptions = [];
+  for (const type of Object.keys(RULES)) subscriptions.push(await bus.subscribe('notifier', type, handle));
+  return subscriptions;
 }
 
 /** Tenancy answers "who can do X here", cached briefly per workspace. */

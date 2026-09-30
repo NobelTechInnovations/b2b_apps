@@ -60,8 +60,14 @@ subdomain, and no CORS list has to know each company's address.
    | `REGISTER_PER_HOUR` | `10` |
    | `TRIAL_DAYS` | `14` (or `0` to take payment before anything unlocks) |
    | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` | from Razorpay |
-   | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | ZeptoMail: `smtp.zeptomail.in`, `587`, and the Mail Agent's SMTP user/password |
-   | `MAIL_FROM` | e.g. `FLP Worldwide <noreply@flpworldwide.com>` — a domain verified in ZeptoMail |
+   | `SMTP_HOST` / `SMTP_PORT` | Gmail: `smtp.gmail.com`, `587` |
+   | `SMTP_USER` / `SMTP_PASS` | the Gmail address, and a 16-letter **App Password** (Google Account → Security → 2-Step Verification → App passwords) — never the normal password |
+   | `MAIL_FROM` | `FLP Worldwide <that-gmail-address>` — Gmail rewrites any other sender |
+
+   Email is optional: without the SMTP variables, invitations and password
+   resets are written to the logs, and Settings → People shows the invite link
+   to copy. Gmail sends about 500 messages a day (2,000 on Google Workspace), so
+   keep marketing campaigns small or move to a transactional provider later.
 
    Leave `BILLING_TEST_MODE` unset in production. Generate secrets with
    `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.

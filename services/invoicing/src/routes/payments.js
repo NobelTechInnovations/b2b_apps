@@ -245,6 +245,20 @@ export async function paymentRoutes(app) {
           [payment.id, orgId, toRupees(allocated)],
         );
 
+        // Every rupee received, allocated or on account, reaches the ledger.
+        const customer = final.customer_id
+          ? await tx.one(`SELECT name FROM customers WHERE org_id = $1 AND id = $2`, [orgId, final.customer_id])
+          : null;
+        tx.emit({
+          type: EVENTS.PAYMENT_RECEIVED,
+          org_id: orgId,
+          actor_id: userId,
+          data: {
+            payment_id: final.id, number: final.number, amount: final.amount, method: final.method,
+            received_on: final.received_on, customer_id: final.customer_id, customer_name: customer?.name ?? null,
+          },
+        });
+
         return { payment: final, settled, unallocated: amount - allocated };
       });
 

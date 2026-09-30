@@ -11,6 +11,10 @@ import { activityRoutes } from './routes/activities.js';
 import { overviewRoutes } from './routes/overview.js';
 import { internalImportRoutes } from './routes/internal-import.js';
 import { formRoutes } from './routes/forms.js';
+import { quoteRoutes } from './routes/quotes.js';
+import { partnerRoutes } from './routes/partners.js';
+import { marketingRoutes } from './routes/marketing.js';
+import { socialRoutes } from './routes/social.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NAME = 'crm';
@@ -32,6 +36,11 @@ await app.register(peopleRoutes);
 await app.register(activityRoutes);
 await app.register(internalImportRoutes);
 await app.register(formRoutes);
+// Sales & marketing apps start from, and end in, CRM records.
+await app.register(quoteRoutes);
+await app.register(partnerRoutes);
+await app.register(marketingRoutes);
+await app.register(socialRoutes);
 
 if (bus) startOutboxRelay({ db, bus, logger: app.log });
 

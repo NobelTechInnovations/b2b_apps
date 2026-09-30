@@ -212,7 +212,7 @@ export const APPS = [
     category: 'sales',
     icon: 'FileSignature',
     color: 'indigo',
-    service: 'quotes',
+    service: 'crm',
     price: price(499),
     highlights: ['Branded quote templates', 'Online acceptance', 'Approval rules', 'Order conversion'],
     features: ['quotes.templates', 'quotes.quotations', 'quotes.orders', 'quotes.approvals'],
@@ -241,7 +241,7 @@ export const APPS = [
     category: 'sales',
     icon: 'Handshake',
     color: 'indigo',
-    service: 'partners',
+    service: 'crm',
     price: price(599),
     features: ['partners.accounts', 'partners.deal_registration', 'partners.commissions'],
     permissions: [
@@ -251,8 +251,8 @@ export const APPS = [
     ],
     nav: [
       { label: 'Partners', path: '/partners', icon: 'Handshake', permission: 'partners.accounts.view' },
-      { label: 'Registered deals', path: '/partners/deals', icon: 'BadgeCheck', permission: 'partners.deals.view' },
-      { label: 'Commissions', path: '/partners/commissions', icon: 'Percent', permission: 'partners.commissions.view' },
+      { label: 'Deal registrations', path: '/partners/deals', icon: 'FileSignature', permission: 'partners.deals.view' },
+      { label: 'Commissions', path: '/partners/commissions', icon: 'HandCoins', permission: 'partners.commissions.view' },
     ],
     widgets: [],
     dependencies: ['crm'],
@@ -269,7 +269,7 @@ export const APPS = [
     category: 'marketing',
     icon: 'Megaphone',
     color: 'pink',
-    service: 'marketing',
+    service: 'crm',
     price: price(699),
     highlights: ['Drag-drop email builder', 'Behavioural segments', 'Landing pages', 'Revenue attribution'],
     features: ['marketing.campaigns', 'marketing.segments', 'marketing.templates', 'marketing.landing', 'marketing.attribution'],
@@ -300,7 +300,7 @@ export const APPS = [
     category: 'marketing',
     icon: 'AtSign',
     color: 'pink',
-    service: 'social',
+    service: 'crm',
     price: price(399),
     features: ['social.scheduling', 'social.inbox', 'social.listening'],
     permissions: [
@@ -406,7 +406,7 @@ export const APPS = [
     category: 'commerce',
     icon: 'RefreshCw',
     color: 'rose',
-    service: 'recurring',
+    service: 'invoicing',
     price: price(799),
     features: ['recurring.plans', 'recurring.lifecycle', 'recurring.dunning', 'recurring.metrics'],
     permissions: [
@@ -415,8 +415,8 @@ export const APPS = [
       'recurring.reports.view',
     ],
     nav: [
-      { label: 'Subscribers', path: '/recurring', icon: 'RefreshCw', permission: 'recurring.customers.view' },
-      { label: 'Plans', path: '/recurring/plans', icon: 'LayersIcon', permission: 'recurring.plans.view' },
+      { label: 'Subscriptions', path: '/recurring', icon: 'Repeat', permission: 'recurring.customers.view' },
+      { label: 'Plans', path: '/recurring/plans', icon: 'Layers', permission: 'recurring.plans.view' },
       { label: 'Revenue', path: '/recurring/revenue', icon: 'ChartLine', permission: 'recurring.reports.view' },
     ],
     widgets: [{ id: 'recurring.mrr', title: 'Monthly recurring revenue', size: 'sm', permission: 'recurring.reports.view' }],
@@ -548,7 +548,7 @@ export const APPS = [
     category: 'finance',
     icon: 'Landmark',
     color: 'cyan',
-    service: 'accounting',
+    service: 'invoicing',
     price: price(1299),
     flagship: true,
     highlights: ['Double-entry ledger', 'Auto-posting from other apps', 'P&L and balance sheet', 'Bank reconciliation'],
@@ -609,7 +609,7 @@ export const APPS = [
     category: 'finance',
     icon: 'Building',
     color: 'cyan',
-    service: 'assets',
+    service: 'invoicing',
     price: price(399),
     features: ['assets.register', 'assets.depreciation', 'assets.disposal'],
     permissions: [
@@ -617,8 +617,8 @@ export const APPS = [
       'assets.depreciation.run', 'assets.reports.view',
     ],
     nav: [
-      { label: 'Asset register', path: '/assets', icon: 'Building', permission: 'assets.register.view' },
-      { label: 'Depreciation', path: '/assets/depreciation', icon: 'ChartLine', permission: 'assets.reports.view' },
+      { label: 'Asset register', path: '/assets', icon: 'Landmark', permission: 'assets.register.view' },
+      { label: 'Depreciation', path: '/assets/depreciation', icon: 'TrendingDown', permission: 'assets.reports.view' },
     ],
     widgets: [],
     dependencies: ['accounting'],
@@ -1240,6 +1240,8 @@ const RELEASED_APPS = new Set([
   'core', 'crm', 'hr', 'payroll', 'documents', 'invoicing', 'tasks',
   'helpdesk', 'knowledge', 'recruitment', 'expenses', 'surveys',
   'erp', 'manufacturing', 'quality', 'maintenance', 'pos', 'ecommerce',
+  'accounting', 'assets', 'recurring',
+  'quotes', 'partners', 'marketing', 'social',
 ]);
 for (const app of APPS) app.status = RELEASED_APPS.has(app.slug) ? 'available' : 'coming_soon';
 

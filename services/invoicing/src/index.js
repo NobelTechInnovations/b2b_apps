@@ -10,6 +10,11 @@ import { invoiceRoutes } from './routes/invoices.js';
 import { paymentRoutes } from './routes/payments.js';
 import { customerRoutes } from './routes/customers.js';
 import { templateRoutes } from './routes/templates.js';
+import { accountingRoutes } from './routes/accounting.js';
+import { assetRoutes } from './routes/assets.js';
+import { recurringRoutes } from './routes/recurring.js';
+import { internalRoutes } from './routes/internal.js';
+import { registerAccountingConsumers } from './lib/accounting-consumers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NAME = 'invoicing';
@@ -35,9 +40,15 @@ await app.register(invoiceRoutes);
 await app.register(paymentRoutes);
 await app.register(customerRoutes);
 await app.register(templateRoutes);
+// Finance lives with invoicing: the ledger posts from the invoices beside it.
+await app.register(accountingRoutes);
+await app.register(assetRoutes);
+await app.register(recurringRoutes);
+await app.register(internalRoutes);
 
 if (bus) {
   registerConsumers({ bus, db, settings, logger: app.log });
+  registerAccountingConsumers({ bus, db, logger: app.log });
   startOutboxRelay({ db, bus, logger: app.log });
 }
 

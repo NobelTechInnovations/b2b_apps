@@ -10,4 +10,8 @@ export const config = defineConfig({
   cookieSecret: env('string', { required: true, secret: true }),
   serviceToken: env('string', { required: true, secret: true }),
   tenancyUrl: env('string', { default: 'http://localhost:4002' }),
+  invoicingUrl: env('string', { default: 'http://localhost:4022' }),
+  erpUrl: env('string', { default: 'http://localhost:4040' }),
+  // Where people open links from emails: quote pages, unsubscribe, tracking.
+  appUrl: env('string', { default: 'http://localhost:3000' }),
 });

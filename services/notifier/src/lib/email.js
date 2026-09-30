@@ -51,6 +51,34 @@ const TEMPLATES = {
     subject: 'Your sign-in link',
     ...layout({ heading: 'Sign in to Nexus', lines: ['Use this link to sign in. It works once.'], button: { label: 'Sign in', url: d.link } }),
   }),
+
+  // ── messages a workspace sends its own customers ─────────────────────────
+  quote: (d) => ({
+    subject: `Quotation ${d.number} from ${d.company}`,
+    ...layout({
+      heading: `Your quotation from ${d.company}`,
+      lines: [`Hello ${d.customer ?? ''},`.replace(' ,', ','), `Here is quotation ${d.number} for ₹${Number(d.total).toLocaleString('en-IN', { minimumFractionDigits: 2 })}, valid until ${d.valid_until}.`, 'You can accept or decline it online.'],
+      button: { label: 'View quotation', url: d.link },
+    }),
+  }),
+  campaign: (d) => {
+    const body = layout({ heading: d.heading ?? d.subject, lines: String(d.text ?? '').split(/\n{2,}/).map((p) => p.trim()).filter(Boolean), button: d.button, footer: `You are receiving this from ${d.company}. Unsubscribe: ${d.unsubscribe_url}` });
+    // An invisible image records the open; the unsubscribe link is always there.
+    const pixel = d.pixel_url ? `<img src="${escape(d.pixel_url)}" width="1" height="1" alt="" style="display:block;border:0">` : '';
+    return { subject: d.subject, text: body.text, html: body.html.replace('</body>', `${pixel}</body>`) };
+  },
+  sign_request: (d) => ({
+    subject: `${d.sender} sent you “${d.title}” to sign`,
+    ...layout({ heading: `Please sign “${d.title}”`, lines: [...(d.message ? [`“${d.message}”`] : []), `${d.sender} is using Nexus E-Signature. Review the document and sign it online — it takes a minute.`], button: { label: 'Review and sign', url: d.link }, footer: d.expires_on ? `This request expires on ${d.expires_on}.` : undefined }),
+  }),
+  booking_confirmation: (d) => ({
+    subject: `Confirmed: ${d.title} on ${d.when}`,
+    ...layout({ heading: 'Your booking is confirmed', lines: [`${d.title} with ${d.host} on ${d.when}.`, ...(d.location ? [`Where: ${d.location}`] : [])], footer: 'Need to change it? Reply to this email.' }),
+  }),
+  partner_portal: (d) => ({
+    subject: `Your ${d.company} partner portal`,
+    ...layout({ heading: `Welcome to the ${d.company} partner programme`, lines: ['Register deals, track their progress and see your commissions from your own portal. Keep this link private — it is your key.'], button: { label: 'Open the partner portal', url: d.link } }),
+  }),
 };
 
 export function smtpTransport(config) {

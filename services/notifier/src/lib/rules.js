@@ -223,6 +223,33 @@ export const RULES = {
     link: `/ecommerce/orders?order=${d.order_id}`,
   }],
 
+  // ── sales & marketing ─────────────────────────────────────────────────
+  [EVENTS.QUOTE_APPROVAL_REQUESTED]: (d) => [{
+    kind: 'quotes.approval', app: 'quotes', users: { permission: 'quotes.quotations.approve' },
+    title: `Approve quote ${d.number}: ${d.max_discount}% discount`, body: `${d.customer_name} · ₹${d.total}`,
+    link: `/quotes?open=${d.quotation_id}`,
+  }],
+  [EVENTS.QUOTE_ACCEPTED]: (d) => (d.owner_user_id ? [{
+    kind: 'quotes.accepted', app: 'quotes', users: [d.owner_user_id],
+    title: `${d.customer_name} accepted quote ${d.number}`, body: `₹${d.total} · signed by ${d.accepted_by}`,
+    link: `/quotes?open=${d.quotation_id}`,
+  }] : []),
+  [EVENTS.QUOTE_DECLINED]: (d) => (d.owner_user_id ? [{
+    kind: 'quotes.declined', app: 'quotes', users: [d.owner_user_id],
+    title: `${d.customer_name} declined quote ${d.number}`, body: d.reason ?? null,
+    link: `/quotes?open=${d.quotation_id}`,
+  }] : []),
+  [EVENTS.PARTNER_DEAL_REGISTERED]: (d) => [{
+    kind: 'partners.deal', app: 'partners', users: { permission: 'partners.deals.approve' },
+    title: `${d.partner_name} registered ${d.customer_company}`, body: `${d.number} · ₹${d.expected_value}`,
+    link: `/partners/deals?open=${d.partner_deal_id}`,
+  }],
+  [EVENTS.SOCIAL_POST_DUE]: (d) => [{
+    kind: 'social.due', app: 'social', users: [...new Set([d.created_by, d.approved_by].filter(Boolean))],
+    title: 'A scheduled post is due — publish it now', body: d.preview,
+    link: `/social?open=${d.post_id}`,
+  }],
+
   [EVENTS.TASK_COMPLETED]: (d) => (d.created_by ? [{
     kind: 'task.completed',
     app: 'tasks',

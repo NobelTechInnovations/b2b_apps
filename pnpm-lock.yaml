@@ -195,6 +195,21 @@ importers:
         specifier: ^4.4.0
         version: 4.4.0
 
+  services/erp:
+    dependencies:
+      '@nexus/bus':
+        specifier: workspace:*
+        version: link:../../packages/bus
+      '@nexus/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@nexus/db-kit':
+        specifier: workspace:*
+        version: link:../../packages/db-kit
+      '@nexus/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+
   services/gateway:
     dependencies:
       '@fastify/rate-limit':

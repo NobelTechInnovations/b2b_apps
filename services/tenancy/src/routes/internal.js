@@ -96,6 +96,13 @@ export async function internalRoutes(app) {
   });
 
   /** Billing and catalog ask for the seat count when pricing per user. */
+  /** A workspace's public face — for pages a customer sees (a quote, a signing link). */
+  app.get('/internal/orgs/:orgId', { preHandler: requireInternal() }, async (request) => {
+    const org = await db.one(`SELECT id, name, slug, logo_url, tax_id FROM organizations WHERE id = $1`, [request.params.orgId]);
+    if (!org) throw notFound('Workspace');
+    return { data: org };
+  });
+
   app.get('/internal/orgs/:orgId/stats', { preHandler: requireInternal() }, async (request) => {
     const stats = await db.one(
       `SELECT

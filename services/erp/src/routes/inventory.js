@@ -432,6 +432,7 @@ export async function inventoryRoutes(app) {
         : new Map(lines.map((l) => [l.id, Number(l.quantity) - Number(l.received_quantity)]));
 
       let receivedValue = 0;
+      let receivedTax = 0;
       const received = [];
       for (const line of lines) {
         const take = wanted.get(line.id);
@@ -445,7 +446,9 @@ export async function inventoryRoutes(app) {
           });
         }
         await tx.query(`UPDATE purchase_order_lines SET received_quantity = received_quantity + $3 WHERE org_id = $1 AND id = $2`, [orgId, line.id, take]);
-        receivedValue += lineTotals({ quantity: take, unit_price: line.unit_price, tax_rate: line.tax_rate }).total;
+        const worth = lineTotals({ quantity: take, unit_price: line.unit_price, tax_rate: line.tax_rate });
+        receivedValue += worth.total;
+        receivedTax += worth.tax;
         received.push({ product_id: line.product_id, quantity: take });
       }
       if (!received.length) throw badRequest('Nothing to receive.');
@@ -462,7 +465,7 @@ export async function inventoryRoutes(app) {
       await createChecks(tx, { orgId, userId, trigger: 'receipt', items: received, sourceType: 'purchase_order', sourceId: order.id, sourceRef: order.number });
       tx.emit({
         type: EVENTS.PURCHASE_RECEIVED, org_id: orgId, actor_id: userId,
-        data: { po_id: order.id, number: order.number, vendor_id: order.vendor_id, vendor_name: order.vendor_name, value: toRupees(receivedValue), complete: after.complete },
+        data: { po_id: order.id, number: order.number, vendor_id: order.vendor_id, vendor_name: order.vendor_name, value: toRupees(receivedValue), tax: toRupees(receivedTax), complete: after.complete },
       });
       return po(tx, orgId, order.id);
     });

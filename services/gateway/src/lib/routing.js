@@ -26,6 +26,11 @@ const PLATFORM_ROUTES = [
   { prefix: 'careers',       service: 'hr',       public: true },
   // The public storefront: published stores only, priced from the catalogue.
   { prefix: 'store',         service: 'erp',      public: true },
+  // A customer's quote page, a partner's portal, and email open/click/
+  // unsubscribe links. Each accepts only its own unguessable token.
+  { prefix: 'quote-view',    service: 'crm',      public: true },
+  { prefix: 'partner-portal', service: 'crm',     public: true },
+  { prefix: 'mkt',           service: 'crm',      public: true },
   { prefix: 'teams',         service: 'tenancy' },
   { prefix: 'apps',          service: 'catalog' },
   { prefix: 'plans',         service: 'billing',  public: true },
