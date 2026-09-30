@@ -16,6 +16,5 @@ COPY --from=deps /app ./
 COPY scripts ./scripts
 # Uploaded documents live here; mount a volume at /app/services/documents/.data
 RUN mkdir -p services/documents/.data && chown -R node:node /app
-USER node
 EXPOSE 8080
 CMD ["node", "scripts/start-api.js"]
