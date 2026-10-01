@@ -84,9 +84,12 @@ export async function proxyRoutes(app) {
     // ── gate 2: live membership and resolved permissions ───────────────────
     const authorization = await authz.permissions({ orgId, userId, epoch });
 
-    // A stale epoch means roles changed under this token. Ask for a refresh
-    // rather than serving a decision the workspace has already revoked.
-    if (authorization.epoch !== epoch) {
+    // A stale epoch means something about access changed in this workspace.
+    // The permissions above are already fresh; the token only matters if it
+    // now names the wrong roles (services read those from it). So only the
+    // person whose roles changed is sent to refresh — changing one person's
+    // apps or another person's role no longer bounces everybody.
+    if (authorization.epoch !== epoch && !sameRoles(authorization, request.auth)) {
       reply.header('x-nexus-token-stale', '1');
       throw unauthorized('Your permissions have changed. Refreshing your session.');
     }
@@ -160,6 +163,13 @@ export async function proxyRoutes(app) {
       },
     });
   });
+}
+
+/** Does the token still name exactly the roles this person holds now? */
+function sameRoles(authorization, auth) {
+  const now = new Set(authorization.roles);
+  const claimed = new Set(auth.roles ?? []);
+  return authorization.isOwner === auth.isOwner && now.size === claimed.size && [...now].every((role) => claimed.has(role));
 }
 
 /**

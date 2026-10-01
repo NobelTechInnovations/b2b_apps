@@ -36,6 +36,9 @@ export async function createSession(db, { userId, orgId, request, config }) {
  *   already-rotated token→ REUSE DETECTED: kill the whole family
  *   unknown token        → rejected
  */
+/** How long the token a refresh just replaced may still be presented. */
+const REUSE_GRACE_MS = 30_000;
+
 export async function rotateSession(db, { presented, config, request }) {
   const presentedHash = hashToken(presented);
 
@@ -47,6 +50,14 @@ export async function rotateSession(db, { presented, config, request }) {
 
     if (!current) {
       const reused = await tx.one(`SELECT * FROM sessions WHERE previous_hash = $1`, [presentedHash]);
+      // Two tabs or two requests refreshing at the same moment: the first
+      // rotated the token a few seconds ago and the second still carries the
+      // old one. That is a race, not a theft. Hand out a new access token and
+      // leave the refresh token the first one received in place.
+      if (reused && !reused.revoked_at && new Date(reused.expires_at) > new Date()
+          && Date.now() - new Date(reused.last_used_at).getTime() < REUSE_GRACE_MS) {
+        return { outcome: 'grace', session: reused };
+      }
       if (reused) {
         await tx.query(
           `UPDATE sessions SET revoked_at = now(), revoked_reason = 'token_reuse_detected'

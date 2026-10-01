@@ -178,6 +178,8 @@ export const APPS = [
     features: ['crm.leads', 'crm.contacts', 'crm.companies', 'crm.deals', 'crm.pipeline', 'crm.activities', 'crm.email', 'crm.forecasting'],
     permissions: [
       'crm.leads.view', 'crm.leads.create', 'crm.leads.edit', 'crm.leads.delete', 'crm.leads.export',
+      // Everyone's leads. Without it, people see the leads assigned to them.
+      'crm.leads.manage',
       'crm.contacts.view', 'crm.contacts.create', 'crm.contacts.edit', 'crm.contacts.delete',
       'crm.companies.view', 'crm.companies.create', 'crm.companies.edit', 'crm.companies.delete',
       'crm.deals.view', 'crm.deals.create', 'crm.deals.edit', 'crm.deals.delete',

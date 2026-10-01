@@ -91,10 +91,40 @@ export async function leadsAppRoutes(app) {
   /** The people leads can go to: anyone in the workspace who can open Leads. */
   const team = (orgId) => people.withPermission(orgId, 'leads.leads.view');
 
+  async function assertTeammate(orgId, userId) {
+    if (!(await team(orgId)).some((p) => p.user_id === userId)) throw badRequest('Choose someone who has access to Leads.');
+  }
+
   async function assertOwner(ctx, ownerId) {
     if (!ownerId || ownerId === ctx.userId) return;
     if (!ctx.can('leads.leads.assign')) throw forbidden('Only people who can assign leads can give one to someone else.');
-    if (!(await team(ctx.orgId)).some((p) => p.user_id === ownerId)) throw badRequest('Choose someone who has access to Leads.');
+    await assertTeammate(ctx.orgId, ownerId);
+  }
+
+  /**
+   * Changing a lead's owner. Managers (`leads.leads.assign`) assign anyone's
+   * lead to anyone, or leave it unassigned. Everyone else can hand their own
+   * lead over to a teammate, after which it leaves their list.
+   */
+  async function assertHandover(ctx, lead, ownerId) {
+    if (ctx.can('leads.leads.assign')) return assertOwner(ctx, ownerId);
+    if (lead.owner_user_id !== ctx.userId) throw forbidden('You can only hand over leads that are yours.');
+    if (!ownerId) throw badRequest('Choose who to hand it to.');
+    return assertTeammate(ctx.orgId, ownerId);
+  }
+
+  async function handedOver(tx, ctx, lead, ownerId, known = null) {
+    const names = known ?? await people.lookup([ownerId, ctx.userId]);
+    const to = ownerId ? names.get(ownerId)?.name ?? 'a teammate' : null;
+    const managed = ctx.can('leads.leads.assign');
+    await log(tx, ctx, lead.id, !ownerId ? 'Unassigned' : managed ? `Assigned to ${to}` : `Handed over to ${to}`);
+    // Their open follow-ups go with the lead.
+    await tx.query(
+      `UPDATE activities SET assigned_to = $3 WHERE org_id = $1 AND related_type = 'lead' AND related_id = $2
+          AND completed_at IS NULL AND assigned_to IS NOT DISTINCT FROM $4`,
+      [ctx.orgId, lead.id, ownerId, lead.owner_user_id],
+    );
+    return managed ? null : `Handed over by ${names.get(ctx.userId)?.name ?? 'a teammate'}`;
   }
 
   async function stageById(store, orgId, stageId) {
@@ -171,38 +201,41 @@ export async function leadsAppRoutes(app) {
   });
 
   // ═══════════════════════════════════════════════════════════════════ LIST
-  app.get('/leads/leads', {
-    preHandler: guard('leads.leads.view'),
-    schema: {
-      querystring: query({
-        stage_id: v.id('lstg'),
-        stage_kind: v.enum(['open', 'won', 'lost']),
-        owner: { type: 'string', pattern: '^(me|unassigned|usr_[0-9a-hjkmnp-tv-z]{26})$' },
-        source: v.enum(LEAD_SOURCES),
-        source_id: v.id('lsrc'),
-        followup: v.enum(['overdue', 'today', 'upcoming', 'none']),
-        outcome: v.enum(Object.keys(OUTCOMES)),
-        fresh: v.bool,
-        rating: v.enum(['hot', 'warm', 'cold']),
-        created: v.enum(['today', 'week', 'month']),
-        tag: v.text(40),
-        view: v.enum(['recent', 'followup', 'last_call', 'updated', 'name', 'score']),
-        tz: v.text(64),
-      }),
-    },
-  }, async (request) => {
+  const listQuery = {
+    stage_id: v.id('lstg'),
+    stage_kind: v.enum(['open', 'won', 'lost']),
+    owner: { type: 'string', pattern: '^(me|unassigned|usr_[0-9a-hjkmnp-tv-z]{26})$' },
+    source: v.enum(LEAD_SOURCES),
+    source_id: v.id('lsrc'),
+    followup: v.enum(['overdue', 'today', 'upcoming', 'none']),
+    outcome: v.enum(Object.keys(OUTCOMES)),
+    fresh: v.bool,
+    rating: v.enum(['hot', 'warm', 'cold']),
+    created: v.enum(['today', 'week', 'month']),
+    tag: v.text(40),
+    // A group's own leads: a city by name, or `none` for leads without one.
+    city: v.text(80),
+    view: v.enum(['recent', 'followup', 'last_call', 'updated', 'name', 'score']),
+    tz: v.text(64),
+  };
+  const FROM = 'leads l LEFT JOIN lead_stages s ON s.id = l.stage_id';
+  const TODAY = '(now() AT TIME ZONE $2)::date';
+
+  /** WHERE clause for a lead list from its query string; shared by the list and its groups. */
+  async function listFilter(request) {
     const { orgId, userId } = request.ctx;
     const qs = request.query;
-    const tz = tzOf(request);
-    const values = [orgId, tz];
-    // $2 (the viewer's time zone) is always referenced, so its type is known.
-    const where = ['l.org_id = $1', 'l.archived_at IS NULL', '$2::text IS NOT NULL'];
+    const stages = await ensureStages(db, orgId);
+    // A lead with no stage yet (from an older importer) sits in the first open stage.
+    const first = (stages.find((s) => s.kind === 'open') ?? stages[0])?.id ?? null;
+    const values = [orgId, tzOf(request), first];
+    // $2 (the viewer's time zone) and $3 are always referenced, so their types are known.
+    const where = ['l.org_id = $1', 'l.archived_at IS NULL', '$2::text IS NOT NULL', '$3::text IS NOT DISTINCT FROM $3::text'];
     const own = scope(request.ctx, values);
     if (own) where.push(own);
     const add = (sql, value) => { values.push(value); where.push(sql.replaceAll('?', `$${values.length}`)); };
 
-    if (qs.stage_id) add('l.stage_id = ?', qs.stage_id);
-    // A lead with no stage yet (from an older importer) is still open.
+    if (qs.stage_id) add('COALESCE(l.stage_id, $3) = ?', qs.stage_id);
     if (qs.stage_kind) add(`COALESCE(s.kind, 'open') = ?`, qs.stage_kind);
     if (qs.owner === 'me') add('l.owner_user_id = ?', userId);
     else if (qs.owner === 'unassigned') where.push('l.owner_user_id IS NULL');
@@ -213,12 +246,13 @@ export async function leadsAppRoutes(app) {
     if (qs.fresh) where.push('l.call_count = 0');
     if (qs.rating) add('l.rating = ?', qs.rating);
     if (qs.tag) add('? = ANY(l.tags)', qs.tag);
-    const today = `(now() AT TIME ZONE $2)::date`;
-    if (qs.followup === 'overdue') where.push(`l.next_followup_at < now() AND (l.next_followup_at AT TIME ZONE $2)::date < ${today}`);
-    if (qs.followup === 'today') where.push(`(l.next_followup_at AT TIME ZONE $2)::date = ${today}`);
-    if (qs.followup === 'upcoming') where.push(`(l.next_followup_at AT TIME ZONE $2)::date > ${today}`);
+    if (qs.city === 'none') where.push(`NULLIF(trim(l.city), '') IS NULL`);
+    else if (qs.city) add('lower(trim(l.city)) = lower(trim(?))', qs.city);
+    if (qs.followup === 'overdue') where.push(`l.next_followup_at < now() AND (l.next_followup_at AT TIME ZONE $2)::date < ${TODAY}`);
+    if (qs.followup === 'today') where.push(`(l.next_followup_at AT TIME ZONE $2)::date = ${TODAY}`);
+    if (qs.followup === 'upcoming') where.push(`(l.next_followup_at AT TIME ZONE $2)::date > ${TODAY}`);
     if (qs.followup === 'none') where.push('l.next_followup_at IS NULL');
-    if (qs.created === 'today') where.push(`(l.created_at AT TIME ZONE $2)::date = ${today}`);
+    if (qs.created === 'today') where.push(`(l.created_at AT TIME ZONE $2)::date = ${TODAY}`);
     if (qs.created === 'week') where.push(`l.created_at > now() - interval '7 days'`);
     if (qs.created === 'month') where.push(`l.created_at > now() - interval '30 days'`);
     if (qs.q?.trim()) {
@@ -230,33 +264,92 @@ export async function leadsAppRoutes(app) {
       where.push(`(concat_ws(' ', l.first_name, l.last_name) ILIKE $${n} OR l.company_name ILIKE $${n} OR l.email ILIKE $${n}
                    OR l.city ILIKE $${n} OR l.custom::text ILIKE $${n}${phone})`);
     }
+    return { values, clause: where.join(' AND '), stages, first };
+  }
 
+  app.get('/leads/leads', { preHandler: guard('leads.leads.view'), schema: { querystring: query(listQuery) } }, async (request) => {
+    const qs = request.query;
+    const { values, clause } = await listFilter(request);
     const limit = qs.limit ?? 25;
     const offset = ((qs.page ?? 1) - 1) * limit;
-    const clause = where.join(' AND ');
-    const from = 'leads l LEFT JOIN lead_stages s ON s.id = l.stage_id';
-    const countValues = [orgId, tz];
+    const countValues = [request.ctx.orgId, tzOf(request)];
     const countScope = scope(request.ctx, countValues);
 
-    await ensureStages(db, orgId);
     const [rows, total, counts] = await Promise.all([
       db.rows(
-        `SELECT l.*, s.name AS stage_name, s.color AS stage_color, s.kind AS stage_kind FROM ${from}
+        `SELECT l.*, s.name AS stage_name, s.color AS stage_color, s.kind AS stage_kind FROM ${FROM}
           WHERE ${clause} ORDER BY ${SORTS[qs.view ?? 'recent']} LIMIT ${limit} OFFSET ${offset}`,
         values,
       ),
-      db.one(`SELECT count(*)::int AS n FROM ${from} WHERE ${clause}`, values),
+      db.one(`SELECT count(*)::int AS n FROM ${FROM} WHERE ${clause}`, values),
       db.one(
         `SELECT count(*)::int AS all,
-                count(*) FILTER (WHERE l.next_followup_at < now() AND (l.next_followup_at AT TIME ZONE $2)::date < ${today})::int AS overdue,
-                count(*) FILTER (WHERE (l.next_followup_at AT TIME ZONE $2)::date = ${today})::int AS today,
+                count(*) FILTER (WHERE COALESCE(s.kind, 'open') = 'open')::int AS open,
+                count(*) FILTER (WHERE l.next_followup_at < now() AND (l.next_followup_at AT TIME ZONE $2)::date < ${TODAY})::int AS overdue,
+                count(*) FILTER (WHERE (l.next_followup_at AT TIME ZONE $2)::date = ${TODAY})::int AS today,
                 count(*) FILTER (WHERE l.call_count = 0 AND COALESCE(s.kind, 'open') = 'open')::int AS fresh,
-                count(*) FILTER (WHERE (l.created_at AT TIME ZONE $2)::date = ${today})::int AS new_today
-           FROM ${from} WHERE l.org_id = $1 AND l.archived_at IS NULL${countScope ? ` AND ${countScope}` : ''}`,
+                count(*) FILTER (WHERE (l.created_at AT TIME ZONE $2)::date = ${TODAY})::int AS new_today
+           FROM ${FROM} WHERE l.org_id = $1 AND l.archived_at IS NULL${countScope ? ` AND ${countScope}` : ''}`,
         countValues,
       ),
     ]);
     return { data: await hydrate(rows), meta: { total: total.n, page: qs.page ?? 1, limit, pages: Math.ceil(total.n / limit) || 1, counts } };
+  });
+
+  /**
+   * The same list, grouped: how many leads in each stage, with each person,
+   * from each source, per last call result, city, tag or follow-up. Each
+   * group's key is the filter that opens just that group.
+   */
+  const GROUPS = ['stage', 'owner', 'source', 'outcome', 'followup', 'city', 'tag'];
+  app.get('/leads/groups', {
+    preHandler: guard('leads.leads.view'),
+    schema: { querystring: query({ ...listQuery, by: v.enum(GROUPS) }) },
+  }, async (request) => {
+    const by = request.query.by ?? 'stage';
+    const { values, clause, stages } = await listFilter(request);
+    const key = {
+      stage: 'COALESCE(l.stage_id, $3)',
+      owner: 'l.owner_user_id',
+      source: 'l.source',
+      outcome: 'l.last_call_outcome',
+      city: `NULLIF(initcap(lower(trim(l.city))), '')`,
+      followup: `CASE WHEN l.next_followup_at IS NULL THEN 'none'
+                      WHEN (l.next_followup_at AT TIME ZONE $2)::date < ${TODAY} THEN 'overdue'
+                      WHEN (l.next_followup_at AT TIME ZONE $2)::date = ${TODAY} THEN 'today' ELSE 'upcoming' END`,
+    }[by];
+    const rows = by === 'tag'
+      ? await db.rows(
+        `SELECT t.tag AS key, count(*)::int AS count FROM ${FROM} CROSS JOIN LATERAL unnest(l.tags) AS t(tag)
+          WHERE ${clause} GROUP BY t.tag ORDER BY count DESC, t.tag LIMIT 60`,
+        values,
+      )
+      : await db.rows(`SELECT ${key} AS key, count(*)::int AS count FROM ${FROM} WHERE ${clause} GROUP BY 1 ORDER BY count DESC LIMIT 60`, values);
+
+    const names = by === 'owner' ? await people.lookup(rows.map((r) => r.key)) : null;
+    const FOLLOW = { overdue: 'Overdue', today: 'Today', upcoming: 'Upcoming', none: 'No follow-up booked' };
+    const groups = rows.map((r) => {
+      switch (by) {
+        case 'stage': {
+          const stage = stages.find((s) => s.id === r.key);
+          return { key: r.key, label: stage?.name ?? 'No stage', color: stage?.color ?? 'slate', count: r.count, filter: { stage_id: r.key }, order: stage?.position ?? 99 };
+        }
+        case 'owner':
+          return { key: r.key ?? 'unassigned', label: r.key ? names.get(r.key)?.name ?? 'Former member' : 'Unassigned', count: r.count, filter: { owner: r.key ?? 'unassigned' } };
+        case 'source':
+          return { key: r.key, label: r.key, count: r.count, filter: { source: r.key } };
+        case 'outcome':
+          return { key: r.key ?? 'none', label: r.key ? OUTCOMES[r.key] : 'Not called yet', count: r.count, filter: r.key ? { outcome: r.key } : { fresh: true } };
+        case 'followup':
+          return { key: r.key, label: FOLLOW[r.key], count: r.count, filter: { followup: r.key }, order: ['overdue', 'today', 'upcoming', 'none'].indexOf(r.key) };
+        case 'city':
+          return { key: r.key ?? 'none', label: r.key ?? 'No city', count: r.count, filter: { city: r.key ?? 'none' } };
+        default:
+          return { key: r.key, label: r.key, count: r.count, filter: { tag: r.key } };
+      }
+    });
+    if (by === 'stage' || by === 'followup') groups.sort((a, b) => a.order - b.order);
+    return { data: groups.map(({ order: _order, ...g }) => g), meta: { by } };
   });
 
   // ═══════════════════════════════════════════════════════════════════ READ
@@ -386,19 +479,11 @@ export async function leadsAppRoutes(app) {
         set('custom', JSON.stringify(merged));
       }
       if (b.owner_user_id !== undefined && b.owner_user_id !== lead.owner_user_id) {
-        if (!request.ctx.can('leads.leads.assign')) throw forbidden('You cannot reassign leads.');
-        await assertOwner(request.ctx, b.owner_user_id);
+        await assertHandover(request.ctx, lead, b.owner_user_id);
         set('owner_user_id', b.owner_user_id);
-        const names = await people.lookup([b.owner_user_id]);
-        await log(tx, request.ctx, lead.id, b.owner_user_id ? `Assigned to ${names.get(b.owner_user_id)?.name ?? 'a teammate'}` : 'Unassigned');
-        // Their open follow-ups go with the lead.
-        await tx.query(
-          `UPDATE activities SET assigned_to = $3 WHERE org_id = $1 AND related_type = 'lead' AND related_id = $2
-              AND completed_at IS NULL AND assigned_to IS NOT DISTINCT FROM $4`,
-          [orgId, lead.id, b.owner_user_id, lead.owner_user_id],
-        );
+        const via = await handedOver(tx, request.ctx, lead, b.owner_user_id);
         if (b.owner_user_id && b.owner_user_id !== userId) {
-          tx.emit({ type: EVENTS.LEAD_ASSIGNED, org_id: orgId, actor_id: userId, data: { owner_user_id: b.owner_user_id, count: 1, lead_id: lead.id, name: leadName(lead) } });
+          tx.emit({ type: EVENTS.LEAD_ASSIGNED, org_id: orgId, actor_id: userId, data: { owner_user_id: b.owner_user_id, count: 1, lead_id: lead.id, name: leadName(lead), via } });
         }
       }
       if (sets.length) {
@@ -408,6 +493,10 @@ export async function leadsAppRoutes(app) {
       }
       if (b.stage_id) await changeStage(tx, request.ctx, lead, b.stage_id);
     });
+    // Handed over: it is the teammate's now, so say so rather than show it.
+    if (!seesAll(request.ctx) && b.owner_user_id !== undefined && b.owner_user_id !== userId) {
+      return { data: { id: request.params.id, owner_user_id: b.owner_user_id, handed_over: true } };
+    }
     return { data: (await hydrate([await loadLead(db, request.ctx, request.params.id)]))[0] };
   });
 
@@ -438,9 +527,13 @@ export async function leadsAppRoutes(app) {
   }, async (request) => {
     const { orgId, userId } = request.ctx;
     const b = request.body;
-    if (b.action === 'assign' && !request.ctx.can('leads.leads.assign')) throw forbidden('You cannot reassign leads.');
     if (b.action === 'delete' && !request.ctx.can('leads.leads.delete')) throw forbidden('You cannot delete leads.');
-    if (b.action === 'assign') await assertOwner(request.ctx, b.owner_user_id ?? null);
+    // Managers assign anyone's leads; everyone else hands over their own (the scope below keeps it to theirs).
+    if (b.action === 'assign') {
+      if (request.ctx.can('leads.leads.assign')) await assertOwner(request.ctx, b.owner_user_id ?? null);
+      else if (!b.owner_user_id) throw badRequest('Choose who to hand them to.');
+      else await assertTeammate(orgId, b.owner_user_id);
+    }
     const stage = b.action === 'stage' ? await stageById(db, orgId, b.stage_id ?? '') : null;
     if (b.action === 'tag' && !b.tag?.trim()) throw badRequest('Name the tag.');
 
@@ -455,16 +548,13 @@ export async function leadsAppRoutes(app) {
       if (!ids.length) return 0;
       if (b.action === 'assign') {
         const owner = b.owner_user_id ?? null;
+        let via = null;
+        const names = await people.lookup([owner, userId]);
+        for (const lead of leads) via = await handedOver(tx, request.ctx, lead, owner, names);
         await tx.query(`UPDATE leads SET owner_user_id = $3, updated_at = now() WHERE org_id = $1 AND id = ANY($2)`, [orgId, ids, owner]);
-        await tx.query(
-          `UPDATE activities a SET assigned_to = $3 FROM leads l
-            WHERE a.org_id = $1 AND a.related_type = 'lead' AND a.related_id = ANY($2) AND a.completed_at IS NULL
-              AND l.id = a.related_id AND a.assigned_to IS NOT DISTINCT FROM l.owner_user_id`,
-          [orgId, ids, owner],
-        );
-        const names = await people.lookup([owner]);
-        for (const lead of leads) await log(tx, request.ctx, lead.id, owner ? `Assigned to ${names.get(owner)?.name ?? 'a teammate'}` : 'Unassigned');
-        if (owner && owner !== userId) tx.emit({ type: EVENTS.LEAD_ASSIGNED, org_id: orgId, actor_id: userId, data: { owner_user_id: owner, count: ids.length } });
+        if (owner && owner !== userId) {
+          tx.emit({ type: EVENTS.LEAD_ASSIGNED, org_id: orgId, actor_id: userId, data: { owner_user_id: owner, count: ids.length, ...(ids.length === 1 ? { lead_id: ids[0], name: leadName(leads[0]) } : {}), via } });
+        }
       } else if (b.action === 'stage') {
         for (const lead of leads) await changeStage(tx, request.ctx, lead, stage.id);
       } else if (b.action === 'tag') {

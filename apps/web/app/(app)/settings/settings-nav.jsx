@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Building2, Users, Shield, CreditCard, UserCircle, Bell, KeyRound, ScrollText } from 'lucide-react';
+import { Building2, Users, Shield, CreditCard, UserCircle, Bell, KeyRound, ScrollText, Mail } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useWorkspace } from '@/lib/workspace';
 
@@ -19,6 +19,7 @@ const SECTIONS = [
     label: 'Workspace',
     items: [
       { href: '/settings/audit', label: 'Audit log', icon: ScrollText, permission: 'core.audit.view' },
+      { href: '/settings/emails', label: 'Email log', icon: Mail, permission: 'core.settings.manage' },
       { href: '/settings/general', label: 'General', icon: Building2, permission: 'core.settings.view' },
       { href: '/settings/members', label: 'People', icon: Users, permission: 'core.members.view' },
       { href: '/settings/roles', label: 'Roles & permissions', icon: Shield, permission: 'core.roles.view' },

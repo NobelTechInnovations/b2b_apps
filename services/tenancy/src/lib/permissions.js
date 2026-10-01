@@ -129,8 +129,24 @@ export async function resolveMemberPermissions(db, { orgId, memberId }) {
 
   // Administrators run the workspace, so no app is hidden from them.
   const appAccess = roles.includes('admin') ? null : access?.app_access ?? null;
-  return { roles, permissions: limitToApps(permissions, appAccess), isOwner: false, appAccess };
+  const limited = limitToApps(permissions, appAccess);
+
+  // Sharing an app with someone whose role does nothing in it (an Employee
+  // given Leads, say) gives them a Member's everyday access there. Otherwise
+  // the app would be "shared" yet never appear for them.
+  for (const slug of appAccess ?? []) {
+    const working = [...limited].some((p) => p.startsWith(`${slug}.`) && p.split('.')[1] !== 'self');
+    if (working) continue;
+    for (const permission of memberLevel()) if (permission.startsWith(`${slug}.`)) limited.add(permission);
+  }
+  // A permission denied to this person directly stays denied.
+  for (const row of direct) if (row.effect === 'deny') limited.delete(row.permission);
+
+  return { roles, permissions: limited, isOwner: false, appAccess };
 }
+
+let memberPermissions = null;
+const memberLevel = () => (memberPermissions ??= permissionsForRoleTemplate(SYSTEM_ROLES.find((r) => r.slug === 'member')));
 
 /** Never limited by app access: the workspace itself, and billing. */
 const WORKSPACE_APPS = new Set(['core', 'billing', 'catalog']);

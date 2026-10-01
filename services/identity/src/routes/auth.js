@@ -292,12 +292,13 @@ export async function authRoutes(app) {
         throw unauthorized('Your session was ended for security reasons. Please sign in again.');
       }
 
-      if (result.outcome !== 'rotated') {
+      if (result.outcome !== 'rotated' && result.outcome !== 'grace') {
         clearAuthCookies(reply, config);
         throw unauthorized('Your session has expired. Please sign in again.');
       }
 
-      const { session, refreshToken } = result;
+      // `grace`: no new refresh token — the browser already holds the newest one.
+      const { session, refreshToken = null } = result;
       const user = await db.one(`SELECT * FROM users WHERE id = $1 AND status = 'active'`, [
         session.user_id,
       ]);

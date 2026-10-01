@@ -11,6 +11,10 @@ const SORTS = ['created_at', 'updated_at', 'score', 'estimated_value', 'last_con
 export async function leadRoutes(app) {
   const { db } = app;
 
+  /** People see the leads assigned to them; `crm.leads.manage` sees everyone's. */
+  const own = (ctx) => !ctx.can('crm.leads.manage');
+  const visible = (ctx, lead) => lead && (!own(ctx) || lead.owner_user_id === ctx.userId) ? lead : null;
+
   // ═══════════════════════════════════════════════════════════════════ LIST
   app.get(
     '/crm/leads',
@@ -33,6 +37,7 @@ export async function leadRoutes(app) {
 
       const where = ['l.org_id = $1', 'l.archived_at IS NULL'];
       const values = [orgId];
+      if (own(request.ctx)) { values.push(userId); where.push(`l.owner_user_id = $${values.length}`); }
 
       if (status) { values.push(status); where.push(`l.status = $${values.length}`); }
       if (rating) { values.push(rating); where.push(`l.rating = $${values.length}`); }
@@ -64,8 +69,8 @@ export async function leadRoutes(app) {
              count(*) FILTER (WHERE status = 'qualified')::int   AS qualified,
              count(*) FILTER (WHERE status = 'converted')::int   AS converted,
              COALESCE(sum(estimated_value) FILTER (WHERE status <> 'unqualified'), 0)::text AS open_value
-           FROM leads WHERE org_id = $1 AND archived_at IS NULL`,
-          [orgId],
+           FROM leads WHERE org_id = $1 AND archived_at IS NULL${own(request.ctx) ? ' AND owner_user_id = $2' : ''}`,
+          own(request.ctx) ? [orgId, userId] : [orgId],
         ),
       ]);
 
@@ -81,10 +86,10 @@ export async function leadRoutes(app) {
       schema: { params: params({ leadId: v.id('led') }) },
     },
     async (request) => {
-      const lead = await db.one(
+      const lead = visible(request.ctx, await db.one(
         `SELECT * FROM leads WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`,
         [request.params.leadId, request.ctx.orgId],
-      );
+      ));
       if (!lead) throw notFound('Lead');
 
       const activities = await db.rows(
@@ -163,10 +168,10 @@ export async function leadRoutes(app) {
     async (request) => {
       const { orgId } = request.ctx;
 
-      const existing = await db.one(
+      const existing = visible(request.ctx, await db.one(
         `SELECT * FROM leads WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`,
         [request.params.leadId, orgId],
-      );
+      ));
       if (!existing) throw notFound('Lead');
       if (existing.status === 'converted') {
         throw badRequest('This lead has already been converted and cannot be edited.');
@@ -222,10 +227,10 @@ export async function leadRoutes(app) {
       const { orgId, userId } = request.ctx;
       const b = request.body ?? {};
 
-      const lead = await db.one(
+      const lead = visible(request.ctx, await db.one(
         `SELECT * FROM leads WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`,
         [request.params.leadId, orgId],
-      );
+      ));
       if (!lead) throw notFound('Lead');
       if (lead.status === 'converted') {
         throw badRequest('This lead has already been converted.', {
@@ -382,8 +387,8 @@ export async function leadRoutes(app) {
     async (request) => {
       const row = await db.one(
         `UPDATE leads SET archived_at = now()
-          WHERE id = $1 AND org_id = $2 AND archived_at IS NULL RETURNING id`,
-        [request.params.leadId, request.ctx.orgId],
+          WHERE id = $1 AND org_id = $2 AND archived_at IS NULL${own(request.ctx) ? ' AND owner_user_id = $3' : ''} RETURNING id`,
+        own(request.ctx) ? [request.params.leadId, request.ctx.orgId, request.ctx.userId] : [request.params.leadId, request.ctx.orgId],
       );
       if (!row) throw notFound('Lead');
       return { data: { archived: true } };

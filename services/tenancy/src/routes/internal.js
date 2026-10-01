@@ -203,6 +203,9 @@ export async function internalRoutes(app) {
     await assertSeatAvailable({ db, config: app.config, orgId, email });
 
     const raw = randomBytes(32).toString('base64url');
+    // Employee-portal invitations (from HR) open Boards and expense claims;
+    // an owner can share more apps from Settings → People afterwards.
+    const appAccess = roles.every((r) => r.slug === 'employee') ? ['expenses', 'tasks'] : null;
 
     const invitation = await db.transaction(async (tx) => {
       await tx.query(
@@ -213,12 +216,12 @@ export async function internalRoutes(app) {
 
       const created = await tx.one(
         `INSERT INTO invitations
-           (id, org_id, email, token_hash, role_ids, title, message, invited_by, expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now() + interval '14 days')
+           (id, org_id, email, token_hash, role_ids, title, message, invited_by, expires_at, app_access)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now() + interval '14 days', $9)
          RETURNING *`,
         [
           id('inv'), orgId, email, hashToken(raw), roleIds,
-          title ?? null, message ?? null, invitedBy ?? 'service',
+          title ?? null, message ?? null, invitedBy ?? 'service', appAccess,
         ],
       );
 

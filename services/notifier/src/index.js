@@ -7,6 +7,7 @@ import { config } from './config.js';
 import { registerConsumer, createTenancyClient } from './lib/consumer.js';
 import { createEmailSender } from './lib/email.js';
 import { notificationRoutes } from './routes/notifications.js';
+import { emailRoutes } from './routes/emails.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NAME = 'notifier';
@@ -19,7 +20,9 @@ await runMigrations({ db, dir: path.join(here, '..', 'migrations'), logger: cons
 const bus = await createBus({ servers: config.natsUrl, name: NAME, db });
 
 const app = await createService({ name: NAME, config, db, bus });
+const sender = createEmailSender({ config, db, logger: app.log });
 await app.register(notificationRoutes);
+await app.register(emailRoutes, { sender });
 
 await registerConsumer({
   bus,
@@ -27,6 +30,6 @@ await registerConsumer({
   tenancy: createTenancyClient({ baseUrl: config.tenancyUrl, serviceToken: config.serviceToken, logger: app.log }),
   logger: app.log,
 });
-await createEmailSender({ config, db, logger: app.log }).register(bus);
+await sender.register(bus);
 
 await startService(app, { port: config.port, name: NAME });

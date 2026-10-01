@@ -138,7 +138,7 @@ test('Leads: fields, calls, follow-ups, ownership and reminders', async (t) => {
     assert.ok(!ok(await rep.call('/leads/leads')).some((l) => l.id === mine.id));
     assert.equal((await rep.call(`/leads/leads/${mine.id}`)).status, 404);
     assert.ok(ok(await owner.call('/leads/leads')).some((l) => l.id === lead.id), 'owners see the rep’s lead');
-    assert.equal((await rep.call(`/leads/leads/${lead.id}`, 'PATCH', { owner_user_id: ownerId })).status, 403);
+    assert.equal((await rep.call(`/leads/leads/${mine.id}`, 'PATCH', { owner_user_id: repId })).status, 404, 'nobody takes a lead that is not theirs');
     const moved = ok(await owner.call(`/leads/leads/${mine.id}`, 'PATCH', { owner_user_id: repId }));
     assert.equal(moved.owner.user_id, repId);
     ok(await rep.call(`/leads/leads/${mine.id}`));
@@ -277,5 +277,120 @@ test('Leads: CSV import, sheets, webhooks and survey forms', async (t) => {
     assert.equal(pooja.custom.budget, 2500000);
     assert.equal(pooja.source_detail, 'Form · Home loan enquiry');
     assert.match(pooja.notes, /When do you plan to buy\?: Later/);
+  });
+});
+
+test('Leads: handing over, grouping, CRM visibility and app access for employees', async (t) => {
+  const { client: owner, stamp } = await workspace(APPS);
+  const { client: asha } = await inviteWithApps(owner, 'member', `${stamp}-asha`, ['leads', 'crm']);
+  const { client: vikram } = await inviteWithApps(owner, 'member', `${stamp}-vikram`, ['leads']);
+  const ashaId = ok(await asha.call('/me/workspace')).user.id;
+  const vikramId = ok(await vikram.call('/me/workspace')).user.id;
+  let first, second;
+
+  await t.test('a caller hands their own lead to a teammate, and it leaves their list', async () => {
+    first = ok(await asha.call('/leads/leads', 'POST', { full_name: 'Gopal Rao', phone: '9810000001' }), 201);
+    second = ok(await asha.call('/leads/leads', 'POST', { full_name: 'Farah Ali', phone: '9810000002' }), 201);
+    assert.equal(ok(await vikram.call('/leads/leads?stage_kind=open')).length, 0, 'nothing is shared until it is handed over');
+    ok(await asha.call(`/leads/leads/${first.id}/followups`, 'POST', { due_at: new Date(Date.now() + 86_400_000).toISOString(), kind: 'call' }), 201);
+    assert.equal((await asha.call(`/leads/leads/${first.id}`, 'PATCH', { owner_user_id: null })).status, 400, 'members cannot leave a lead unassigned');
+    const moved = ok(await asha.call(`/leads/leads/${first.id}`, 'PATCH', { owner_user_id: vikramId }));
+    assert.deepEqual(moved, { id: first.id, owner_user_id: vikramId, handed_over: true });
+    assert.equal((await asha.call(`/leads/leads/${first.id}`)).status, 404);
+    const theirs = ok(await vikram.call(`/leads/leads/${first.id}`));
+    assert.equal(theirs.owner_user_id, vikramId);
+    assert.equal(theirs.followups[0].assigned_to, vikramId, 'the follow-up goes with it');
+    assert.ok(theirs.timeline.some((a) => a.subject === 'Handed over to Caller member' || a.subject.startsWith('Handed over to')));
+    assert.equal((await vikram.call(`/leads/leads/${second.id}`, 'PATCH', { owner_user_id: vikramId })).status, 404);
+    const note = await waitFor(async () => ok(await vikram.call('/notifications')).find((n) => n.kind === 'leads.assigned'));
+    assert.match(note.title, /Gopal Rao was handed over to you/);
+    assert.match(note.body, /^Handed over by /);
+  });
+
+  await t.test('in bulk too, and a manager can hand them back', async () => {
+    assert.equal(ok(await asha.call('/leads/leads/bulk', 'POST', { ids: [second.id, first.id], action: 'assign', owner_user_id: vikramId })).changed, 1, 'only her own lead moves');
+    assert.equal(ok(await vikram.call('/leads/leads')).length, 2);
+    ok(await owner.call('/leads/leads/bulk', 'POST', { ids: [first.id, second.id], action: 'assign', owner_user_id: ashaId }));
+    assert.equal(ok(await asha.call('/leads/leads')).length, 2);
+  });
+
+  await t.test('leads group by stage, owner and follow-up', async () => {
+    ok(await owner.call('/leads/leads', 'POST', { full_name: 'Owner Lead', phone: '9810000003', city: 'pune' }), 201);
+    const byOwner = ok(await owner.call('/leads/groups?by=owner&stage_kind=open'));
+    assert.equal(byOwner.find((g) => g.key === ashaId).count, 2);
+    const byStage = ok(await owner.call('/leads/groups?by=stage'));
+    assert.equal(byStage[0].label, 'New');
+    assert.equal(byStage[0].count, 3);
+    const byCity = ok(await owner.call('/leads/groups?by=city'));
+    assert.ok(byCity.some((g) => g.label === 'Pune' && g.count === 1));
+    assert.ok(byCity.some((g) => g.key === 'none' && g.count === 2));
+    const inGroup = ok(await owner.call(`/leads/leads?${new URLSearchParams(byCity.find((g) => g.key === 'none').filter)}`));
+    assert.equal(inGroup.length, 2);
+    const followups = ok(await asha.call('/leads/groups?by=followup&tz=Asia/Kolkata'));
+    assert.ok(followups.every((g) => ['overdue', 'today', 'upcoming', 'none'].includes(g.key)));
+    assert.equal(ok(await asha.call('/leads/groups?by=owner')).length, 1, 'a caller only ever sees their own group');
+  });
+
+  await t.test('CRM shows people their own leads; owners see all', async () => {
+    const boss = ok(await owner.call('/crm/leads', 'POST', { first_name: 'Boss', last_name: 'Lead', email: 'boss-lead@example.com' }), 201);
+    const hers = ok(await asha.call('/crm/leads', 'POST', { first_name: 'Her', last_name: 'Lead' }), 201);
+    const list = ok(await asha.call('/crm/leads?limit=100'));
+    assert.ok(list.some((l) => l.id === hers.id));
+    assert.ok(!list.some((l) => l.id === boss.id));
+    assert.equal((await asha.call(`/crm/leads/${boss.id}`)).status, 404);
+    assert.ok(ok(await owner.call('/crm/leads?limit=100')).some((l) => l.id === hers.id));
+  });
+
+  await t.test('sharing Leads with an Employee gives them working access', async () => {
+    const { client: staff } = await inviteWithApps(owner, 'employee', `${stamp}-staff`, ['leads', 'tasks']);
+    const ws = ok(await staff.call('/me/workspace'));
+    assert.ok(ws.navigation.some((n) => n.slug === 'leads'), 'Leads appears for them');
+    ok(await staff.call('/leads/leads'));
+    ok(await staff.call('/leads/leads', 'POST', { full_name: 'Walk In', phone: '9810000004' }), 201);
+    assert.equal((await staff.call('/leads/import/preview', 'POST', { csv: 'Name\nA' })).status, 403, 'still not a manager');
+  });
+
+  await t.test('changing someone’s apps does not sign anybody out', async () => {
+    const members = ok(await owner.call('/members'));
+    const vikramMember = members.find((m) => m.user_id === vikramId);
+    const cookie = asha.cookie();
+    ok(await owner.call(`/members/${vikramMember.id}/apps`, 'PUT', { app_access: ['leads', 'tasks'] }));
+    const raw = await fetch(`${API}/api/leads/leads`, { headers: { cookie } });
+    assert.equal(raw.status, 200, 'other people carry on without refreshing');
+    const roles = ok(await owner.call('/roles'));
+    ok(await owner.call(`/members/${members.find((m) => m.user_id === ashaId).id}/roles`, 'PUT', { role_ids: [roles.find((r) => r.slug === 'guest').id] }));
+    assert.equal((await fetch(`${API}/api/leads/leads`, { headers: { cookie } })).status, 401, 'a changed role needs a fresh token');
+  });
+
+  await t.test('two refreshes at the same moment do not end the session', async () => {
+    const jar = Object.fromEntries(vikram.cookie().split('; ').map((c) => [c.slice(0, c.indexOf('=')), c.slice(c.indexOf('=') + 1)]));
+    const refresh = () => fetch(`${API}/api/auth/refresh`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: `nx_rt=${jar.nx_rt}` }, body: '{}' });
+    const [a, b] = await Promise.all([refresh(), refresh()]);
+    assert.deepEqual([a.status, b.status], [200, 200]);
+    ok(await vikram.call('/leads/leads'));
+  });
+});
+
+test('Email log: every email is recorded with what happened', async (t) => {
+  const { client: owner, stamp } = await workspace(['tasks']);
+  const member = await invite(owner, 'member', `${stamp}-m`);
+
+  await t.test('a test email reports its outcome and lands in the log', async () => {
+    const result = ok(await owner.call('/notifications/emails/test', 'POST', { to: `probe-${stamp}@nexus.test` }));
+    assert.equal(result.status, 'logged');
+    assert.match(result.error, /Test address/);
+    const log = await owner.call('/notifications/emails');
+    assert.equal(log.status, 200);
+    const row = log.data.find((e) => e.to_address === `probe-${stamp}@nexus.test`);
+    assert.equal(row.template, 'test');
+    assert.ok(row.server, 'the server that handled it is recorded');
+    assert.ok(log.meta.this_server.server);
+  });
+
+  await t.test('invitations are logged too, and only admins can read the log', async () => {
+    await waitFor(async () => ok(await owner.call('/notifications/emails')).some((e) => e.template === 'invitation'));
+    assert.ok(ok(await owner.call('/notifications/emails')).some((e) => e.template === 'invitation'));
+    assert.equal((await member.call('/notifications/emails')).status, 403);
+    assert.equal((await member.call('/notifications/emails/test', 'POST', {})).status, 403);
   });
 });

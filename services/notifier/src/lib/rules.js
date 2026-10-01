@@ -196,8 +196,10 @@ export const RULES = {
   // ── leads ─────────────────────────────────────────────────────────────
   [EVENTS.LEAD_ASSIGNED]: (d) => (d.owner_user_id ? [{
     kind: 'leads.assigned', app: 'leads', users: [d.owner_user_id],
-    title: d.count > 1 ? `${d.count} new leads were assigned to you` : `New lead assigned to you: ${d.name ?? 'a lead'}`,
-    body: d.via ? `From ${d.via}` : null,
+    title: d.via?.startsWith('Handed over')
+      ? (d.count > 1 ? `${d.count} leads were handed over to you` : `${d.name ?? 'A lead'} was handed over to you`)
+      : (d.count > 1 ? `${d.count} new leads were assigned to you` : `New lead assigned to you: ${d.name ?? 'a lead'}`),
+    body: d.via ? (d.via.startsWith('Handed over') ? d.via : `From ${d.via}`) : null,
     link: d.count > 1 || !d.lead_id ? '/leads?owner=me&fresh=1' : `/leads?open=${d.lead_id}`,
   }] : []),
   [EVENTS.LEAD_FOLLOWUP_DUE]: (d) => (d.assigned_to ? [{

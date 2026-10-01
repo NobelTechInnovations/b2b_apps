@@ -32,7 +32,7 @@ const SUGGEST_STAGE = { interested: 'open', not_interested: 'lost', wrong_number
  */
 export function LeadDrawer({ leadId, meta, onClose, onChanged }) {
   const toast = useToast();
-  const { can, hasApp } = useWorkspace();
+  const { can, hasApp, user } = useWorkspace();
   const [lead, setLead] = useState(null);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -137,6 +137,28 @@ export function LeadDrawer({ leadId, meta, onClose, onChanged }) {
               <span className="flex items-center gap-1.5 text-sm text-[var(--text-secondary)]">
                 <Avatar name={lead.owner?.name ?? '?'} size="xs" /> {lead.owner?.name ?? 'Unassigned'}
               </span>
+            )}
+            {!can('leads.leads.assign') && lead.owner_user_id === user?.id && (
+              <Select
+                aria-label="Hand over to"
+                className="w-auto"
+                value=""
+                onChange={async (e) => {
+                  const to = meta?.team?.find((m) => m.user_id === e.target.value);
+                  if (!to) return;
+                  try {
+                    await api.patch(`/leads/leads/${leadId}`, { owner_user_id: to.user_id });
+                    toast.success(`Handed over to ${to.name ?? to.email}`, { description: 'It now appears in their leads, with its follow-ups.' });
+                    onChanged?.();
+                    onClose();
+                  } catch (err) {
+                    toast.error('Could not hand it over', { description: err instanceof ApiError ? err.message : undefined });
+                  }
+                }}
+              >
+                <option value="">Hand over to…</option>
+                {(meta?.team ?? []).filter((m) => m.user_id !== user?.id).map((m) => <option key={m.user_id} value={m.user_id}>{m.name ?? m.email}</option>)}
+              </Select>
             )}
             {lead.rating && <Badge size="sm" tone={{ hot: 'critical', warm: 'caution', cold: 'info' }[lead.rating]} dot>{lead.rating}</Badge>}
             {lead.status === 'converted' && <Badge size="sm" tone="positive">Customer in CRM</Badge>}
