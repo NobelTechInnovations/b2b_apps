@@ -270,7 +270,12 @@ export async function acceptInvitation(db, { token, userId, email }) {
       type: EVENTS.MEMBER_JOINED,
       org_id: invitation.org_id,
       actor_id: userId,
-      data: { member_id: member.id, user_id: userId, email: invitation.email, via: 'invitation' },
+      data: {
+        member_id: member.id, user_id: userId, email: invitation.email, via: 'invitation',
+        // HR adds people as employees when they join; it needs to know who is a guest.
+        title: invitation.title ?? null,
+        roles: (await tx.rows(`SELECT slug FROM roles WHERE id = ANY($1)`, [invitation.role_ids])).map((r) => r.slug),
+      },
     });
 
     return { org_id: invitation.org_id, member_id: member.id, already_accepted: false };

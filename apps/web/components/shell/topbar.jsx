@@ -6,6 +6,7 @@ import Link from 'next/link';
 import {
   Search, ChevronsUpDown, Check, Plus, LogOut, User, Settings,
   Sun, Moon, Monitor, CreditCard, LifeBuoy, Building2,
+  IdCard,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
@@ -131,6 +132,10 @@ export function Topbar({ organizations = [], onOpenSearch }) {
         <MenuItem icon={User} onClick={() => router.push('/settings/profile')}>Your profile</MenuItem>
         <MenuItem icon={Settings} onClick={() => router.push('/settings')}>Settings</MenuItem>
         <MenuItem icon={CreditCard} onClick={() => router.push('/settings/billing')}>Plan & billing</MenuItem>
+        {/* Your own payslips, leave and attendance, when the workspace runs HR. */}
+        {workspace?.self_service && (
+          <MenuItem icon={IdCard} onClick={() => router.push('/portal')}>My employee portal</MenuItem>
+        )}
         <MenuDivider />
         <MenuLabel>Appearance</MenuLabel>
         <MenuItem icon={Sun} selected={theme === 'light'} onClick={() => setTheme('light')}>Light</MenuItem>

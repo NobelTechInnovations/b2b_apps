@@ -20,6 +20,7 @@ import { createWorkspace } from './lib/workspace.js';
 import { createTenancyClient } from './lib/tenancy-client.js';
 import { registerConsumers } from './lib/consumers.js';
 import { recruitmentRoutes } from './routes/recruitment.js';
+import { createWorkspacePeople } from './lib/workspace-people.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NAME = 'hr';
@@ -41,6 +42,9 @@ app.decorate(
   createTenancyClient({ baseUrl: config.tenancyUrl, serviceToken: config.serviceToken, logger: app.log }),
 );
 
+const workspacePeople = createWorkspacePeople({ tenancyUrl: config.tenancyUrl, serviceToken: config.serviceToken, logger: app.log });
+app.decorate('workspacePeople', workspacePeople);
+
 await app.register(overviewRoutes);
 await app.register(employeeRoutes);
 await app.register(departmentRoutes);
@@ -56,7 +60,7 @@ await app.register(employeeDocumentRoutes);
 await app.register(recruitmentRoutes);
 
 if (bus) {
-  await registerConsumers({ bus, db, logger: app.log });
+  await registerConsumers({ bus, db, logger: app.log, workspacePeople });
   startOutboxRelay({ db, bus, logger: app.log });
 }
 

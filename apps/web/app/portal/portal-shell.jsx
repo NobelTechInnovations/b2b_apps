@@ -26,7 +26,7 @@ const TABS = [
 
 export function PortalShell({ user, organizations, children }) {
   const pathname = usePathname();
-  const { organization, portalOnly } = useWorkspace();
+  const { organization, portalOnly, can, hasApp } = useWorkspace();
   const { theme, setTheme } = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -50,6 +50,13 @@ export function PortalShell({ user, organizations, children }) {
           </div>
 
           <div className="flex-1" />
+
+          {/* Owners and HR admins: the portal is their own record; HR admin is everyone's. */}
+          {!portalOnly && hasApp('hr') && can('hr.employees.view') && (
+            <Link href="/hr/employees" className="hidden rounded-[var(--radius-md)] border border-[var(--border-default)] px-2.5 py-1 text-sm font-medium transition-colors hover:bg-[var(--surface-hover)] sm:block">
+              HR admin
+            </Link>
+          )}
 
           <NotificationBell />
 

@@ -13,8 +13,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { date as fmtDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { useWorkspace } from '@/lib/workspace';
 
 export default function PortalOverview() {
+  const { can, hasApp, user } = useWorkspace();
+  const [linking, setLinking] = useState(false);
+  const [linkError, setLinkError] = useState(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -47,13 +51,37 @@ export default function PortalOverview() {
   // The one error worth explaining rather than showing as a red box: their
   // login works, it just is not attached to an employee record yet.
   if (error?.details?.code === 'no_employee_record' || error?.status === 403) {
+    // An owner or HR admin is the HR team: let them fix it here.
+    const runsHr = hasApp('hr') && can('hr.employees.create');
+    async function linkMe() {
+      setLinking(true);
+      setLinkError(null);
+      try {
+        await api.post('/hr/employees/from-people', { user_ids: [user.id] });
+        setLoading(true);
+        await load();
+      } catch (err) {
+        setLinkError(err instanceof ApiError ? err.message : 'Could not create your record.');
+      } finally {
+        setLinking(false);
+      }
+    }
     return (
       <Card>
         <EmptyState
           icon={UserRound}
           title="Your login isn’t linked to an employee record yet"
-          description="Ask your HR team to connect your account. Once they do, your attendance, leave, payslips and documents will appear here."
+          description={runsHr
+            ? 'This portal is each person’s own payslips, leave and attendance. You run HR here, so you can add yourself as an employee — or go to HR admin to manage everyone.'
+            : 'Ask your HR team to connect your account. Once they do, your attendance, leave, payslips and documents will appear here.'}
+          action={runsHr && (
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button variant="primary" loading={linking} onClick={linkMe}>Create my employee record</Button>
+              <Link href="/hr/employees"><Button variant="secondary">Open HR admin</Button></Link>
+            </div>
+          )}
         />
+        {linkError && <div className="px-6 pb-6"><Alert tone="critical">{linkError}</Alert></div>}
       </Card>
     );
   }

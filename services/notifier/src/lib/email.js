@@ -90,8 +90,11 @@ const TEMPLATES = {
   }),
 };
 
+// A mail server that never answers must not hold the queue for minutes.
+const TIMEOUTS = { connectionTimeout: 15_000, greetingTimeout: 10_000, socketTimeout: 30_000 };
+
 export function smtpTransport(config) {
-  if (config.smtpUrl) return nodemailer.createTransport(config.smtpUrl);
+  if (config.smtpUrl) return nodemailer.createTransport(config.smtpUrl, TIMEOUTS);
   if (!config.smtpHost) return null;
   return nodemailer.createTransport({
     host: config.smtpHost,
@@ -101,7 +104,63 @@ export function smtpTransport(config) {
     secure: config.smtpPort === 465,
     requireTLS: config.smtpPort !== 465,
     auth: config.smtpUser ? { user: config.smtpUser, pass: config.smtpPass } : undefined,
+    ...TIMEOUTS,
   });
+}
+
+/** `FLP Worldwide <noreply@flp.com>` → { name, address }. */
+export function parseAddress(value) {
+  const match = String(value ?? '').match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  return match ? { name: match[1].trim() || null, address: match[2].trim() } : { name: null, address: String(value ?? '').trim() };
+}
+
+/**
+ * Where mail goes: ZeptoMail's HTTPS API, an SMTP server, or nowhere (null —
+ * the message is logged). The API works on hosts that block outbound SMTP.
+ */
+export function createMailer(config) {
+  const token = config.zeptomailToken?.trim();
+  if (token && String(config.emailProvider ?? '').toLowerCase() !== 'smtp') {
+    const url = config.zeptomailApiUrl
+      || (/zeptomail\.com$/i.test(config.smtpHost ?? '') ? 'https://api.zeptomail.com/v1.1/email' : 'https://api.zeptomail.in/v1.1/email');
+    const authorization = /^zoho-enczapikey\s/i.test(token) ? token : `Zoho-enczapikey ${token}`;
+    const from = parseAddress(config.mailFrom);
+    return {
+      label: `ZeptoMail API (${new URL(url).hostname})`,
+      async send({ to, subject, text, html }) {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { accept: 'application/json', 'content-type': 'application/json', authorization },
+          body: JSON.stringify({
+            from: { address: from.address, ...(from.name ? { name: from.name } : {}) },
+            to: [{ email_address: { address: to } }],
+            subject, htmlbody: html, textbody: text,
+          }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const details = (body?.error?.details ?? []).map((d) => [d.target, d.message].filter(Boolean).join(': ')).filter(Boolean).join('; ');
+          const error = new Error(`ZeptoMail ${response.status}: ${body?.error?.message ?? response.statusText}${details ? ` — ${details}` : ''}`);
+          error.response = error.message;
+          // A bad token, an unverified sender or an invalid address will not
+          // pass on a retry; rate limits and server errors may.
+          error.permanent = response.status >= 400 && response.status < 500 && response.status !== 429;
+          throw error;
+        }
+        return { messageId: body?.request_id ?? null, response: `${response.status} ${body?.data?.[0]?.message ?? body?.message ?? 'Accepted'}` };
+      },
+    };
+  }
+  const transport = smtpTransport(config);
+  if (!transport) return null;
+  return {
+    label: transportLabel(config),
+    async send(message) {
+      const info = await transport.sendMail({ from: config.mailFrom, ...message });
+      return { messageId: info.messageId ?? null, response: info.response ?? '' };
+    },
+  };
 }
 
 // Domains reserved for testing and documentation (RFC 2606 / RFC 6761). Mail
@@ -124,10 +183,14 @@ export function transportLabel(config) {
 
 const SERVER = os.hostname();
 
+/** A temporary failure is retried this many times in all, then recorded as failed. */
+const MAX_ATTEMPTS = 4;
+
 export function createEmailSender({ config, db, logger }) {
-  const transport = smtpTransport(config);
-  const label = transportLabel(config);
-  if (!transport) logger.warn('SMTP is not configured — emails are written to the log instead of being sent');
+  const mailer = createMailer(config);
+  const label = mailer?.label ?? null;
+  if (!mailer) logger.warn('Email is not configured — emails are written to the log instead of being sent');
+  else logger.info({ via: label, from: config.mailFrom }, 'email delivery configured');
 
   /**
    * Send one email and keep a record of what happened: sent (with the
@@ -140,11 +203,11 @@ export function createEmailSender({ config, db, logger }) {
     // A link that old has expired anyway; never mail stale history.
     if (occurredAt && Date.now() - new Date(occurredAt).getTime() > 24 * 3_600_000) return null;
     const reserved = RESERVED.test(to.split('@')[1] ?? '');
-    const deliver = Boolean(transport) && !reserved;
+    const deliver = Boolean(mailer) && !reserved;
     const message = render(data ?? {});
     const why = reserved
       ? 'Test address: never sent, only written to the log.'
-      : `This server (${SERVER}) has no SMTP settings, so the email was written to its log instead of being sent.`;
+      : `This server (${SERVER}) has no email settings (SMTP or ZeptoMail), so the email was written to its log instead of being sent.`;
     // Claim the (event, address) first: a redelivery finds it taken and stops,
     // unless the earlier attempt is waiting to be retried.
     const claimed = await db.one(
@@ -154,7 +217,7 @@ export function createEmailSender({ config, db, logger }) {
          SET attempts = emails.attempts + 1, status = EXCLUDED.status, server = EXCLUDED.server,
              transport = EXCLUDED.transport, updated_at = now()
          WHERE emails.status = 'retrying'
-       RETURNING id`,
+       RETURNING id, attempts`,
       [id('eml'), eventId, to.toLowerCase(), template, orgId ?? null, deliver ? 'sending' : 'logged',
         String(message.subject ?? '').slice(0, 300), SERVER, label ?? 'none', deliver ? null : why],
     );
@@ -165,7 +228,7 @@ export function createEmailSender({ config, db, logger }) {
       return { id: claimed.id, status: 'logged', error: why, transport: label, server: SERVER };
     }
     try {
-      const info = await transport.sendMail({ from: config.mailFrom, to, subject: message.subject, text: message.text, html: message.html });
+      const info = await mailer.send({ to, subject: message.subject, text: message.text, html: message.html });
       const reply = String(info.response ?? '').slice(0, 500);
       await db.query(
         `UPDATE emails SET status = 'sent', provider_id = $2, response = $3, error = NULL, updated_at = now() WHERE id = $1`,
@@ -177,12 +240,17 @@ export function createEmailSender({ config, db, logger }) {
       // A 5xx is the provider saying "never": an unverified sender, wrong
       // credentials, a mailbox that does not exist. Retrying cannot help and
       // only holds up the queue, so record why and move on.
-      const permanent = (error.responseCode >= 500 && error.responseCode < 600) || error.code === 'EAUTH';
+      const permanent = error.permanent || (error.responseCode >= 500 && error.responseCode < 600) || error.code === 'EAUTH';
+      // A server that cannot be reached at all gives up after a few tries,
+      // so one stuck email never holds up the ones behind it.
+      const giveUp = permanent || !retry || claimed.attempts >= MAX_ATTEMPTS;
       await db.query(
         `UPDATE emails SET status = $2, error = $3, updated_at = now() WHERE id = $1`,
-        [claimed.id, permanent || !retry ? 'failed' : 'retrying', detail],
+        [claimed.id, giveUp ? 'failed' : 'retrying', error.code === 'ETIMEDOUT' || error.code === 'ECONNECTION'
+          ? `${detail} — this server could not reach ${label}. Some hosts (Railway's Free, Trial and Hobby plans) block outgoing SMTP; use the ZeptoMail API (ZEPTOMAIL_TOKEN) instead.`
+          : detail],
       );
-      if (permanent || !retry) {
+      if (giveUp) {
         logger.error({ template, code: error.responseCode ?? error.code, response: error.response }, 'email rejected by the mail provider');
         return { id: claimed.id, status: 'failed', error: detail, transport: label, server: SERVER };
       }

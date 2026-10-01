@@ -1,4 +1,5 @@
 import { EVENTS } from '@nexus/contracts/events';
+import { usesHr } from './workspace-people.js';
 
 /**
  * Linking an employee record to a platform login.
@@ -12,7 +13,7 @@ import { EVENTS } from '@nexus/contracts/events';
  * invitation was sent to the address on the employee record, so an acceptance
  * for that address is an acceptance by that employee.
  */
-export async function registerConsumers({ bus, db, logger }) {
+export async function registerConsumers({ bus, db, logger, workspacePeople }) {
   await bus.subscribe('hr', EVENTS.MEMBER_JOINED, async (event) => {
     const { org_id: orgId, data } = event;
     if (!orgId || !data?.user_id || !data?.email) return;
@@ -33,12 +34,20 @@ export async function registerConsumers({ bus, db, logger }) {
       [orgId, email, data.user_id],
     );
 
-    if (!linked) return;
+    if (linked) {
+      logger?.info(
+        { orgId, employeeId: linked.id, code: linked.employee_code },
+        'employee linked to a portal login',
+      );
+      return;
+    }
 
-    logger?.info(
-      { orgId, employeeId: linked.id, code: linked.employee_code },
-      'employee linked to a portal login',
-    );
+    // Anyone else who joins the workspace (not a guest) becomes an employee
+    // too, once the workspace uses HR — so the two lists never drift apart.
+    const roles = data.roles ?? [];
+    if (!workspacePeople || (roles.length && roles.every((role) => role === 'guest'))) return;
+    if (!(await usesHr(db, orgId))) return;
+    await workspacePeople.add(db, { orgId, actorId: null, userIds: [data.user_id] });
   });
 
   /**

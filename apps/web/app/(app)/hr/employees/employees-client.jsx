@@ -113,6 +113,10 @@ export default function EmployeesClient() {
         }
       />
 
+      <Can permission="hr.employees.create">
+        <WorkspacePeople onAdded={load} />
+      </Can>
+
       {stats && (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <StatTile label="Headcount" value={stats.headcount} icon={Users} tone="brand" />
@@ -545,5 +549,79 @@ function CreateEmployeeModal({ open, departments, employees, onClose, onCreated 
         </Field>
       </form>
     </Modal>
+  );
+}
+
+/* ── people with a login but no employee record ──────────────────────────── */
+function WorkspacePeople({ onAdded }) {
+  const toast = useToast();
+  const { user } = useWorkspace();
+  const [people, setPeople] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [chosen, setChosen] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    api.get('/hr/employees/workspace-people').then((r) => setPeople(r.data)).catch(() => setPeople([]));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function add(ids) {
+    setBusy(true);
+    try {
+      const result = (await api.post('/hr/employees/from-people', { user_ids: ids })).data;
+      toast.success(`${result.created + result.linked} added as employee${result.created + result.linked === 1 ? '' : 's'}`, {
+        description: result.linked ? `${result.linked} matched an existing employee by email and were linked to it.` : 'They can now open the employee portal for payslips, leave and attendance.',
+      });
+      setOpen(false);
+      load();
+      onAdded?.();
+    } catch (err) {
+      toast.error('Could not add them', { description: err instanceof ApiError ? err.message : undefined });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!people.length) return null;
+  const me = people.find((p) => p.user_id === user?.id);
+  return (
+    <>
+      <Alert
+        tone="info"
+        icon={UserPlus}
+        title={`${people.length} ${people.length === 1 ? 'person' : 'people'} in your workspace ${people.length === 1 ? 'is' : 'are'} not an employee yet`}
+        action={
+          <div className="flex gap-1.5">
+            {me && <Button size="xs" variant="ghost" loading={busy} onClick={() => add([me.user_id])}>Add me</Button>}
+            <Button size="xs" variant="secondary" onClick={() => { setChosen(people.map((p) => p.user_id)); setOpen(true); }}>Review and add</Button>
+          </div>
+        }
+      >
+        {people.slice(0, 4).map((p) => p.name ?? p.email).join(', ')}{people.length > 4 ? ` and ${people.length - 4} more` : ''}. From now on, people who join the workspace are added here automatically (guests are not).
+      </Alert>
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Add workspace people as employees"
+        description="Each gets an employee record linked to their login. Someone whose email already matches an employee is linked to that record instead."
+        footer={<><Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" icon={UserPlus} loading={busy} disabled={!chosen.length} onClick={() => add(chosen)}>Add {chosen.length}</Button></>}
+      >
+        <ul className="max-h-80 space-y-1 overflow-y-auto">
+          {people.map((p) => (
+            <li key={p.user_id}>
+              <label className="flex cursor-pointer items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 hover:bg-[var(--surface-hover)]">
+                <input type="checkbox" className="size-4" checked={chosen.includes(p.user_id)} onChange={(e) => setChosen((c) => (e.target.checked ? [...c, p.user_id] : c.filter((x) => x !== p.user_id)))} />
+                <Avatar name={p.name ?? p.email} size="sm" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{p.name ?? p.email}{p.user_id === user?.id ? ' (you)' : ''}</span>
+                  <span className="block truncate text-xs text-[var(--text-tertiary)]">{[p.email, p.title, p.roles.join(', ')].filter(Boolean).join(' · ')}</span>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      </Modal>
+    </>
   );
 }

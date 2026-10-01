@@ -121,6 +121,21 @@ export async function internalRoutes(app) {
     return { data: stats };
   });
 
+  /** The workspace's active people, with their roles and job titles (HR lists them to add as employees). */
+  app.get('/internal/orgs/:orgId/members', { preHandler: requireInternal() }, async (request) => {
+    const rows = await db.rows(
+      `SELECT m.id AS member_id, m.user_id, m.title, m.joined_at,
+              COALESCE(array_agg(r.slug) FILTER (WHERE r.slug IS NOT NULL), '{}') AS roles
+         FROM members m
+         LEFT JOIN member_roles mr ON mr.member_id = m.id
+         LEFT JOIN roles r ON r.id = mr.role_id
+        WHERE m.org_id = $1 AND m.status = 'active'
+        GROUP BY m.id ORDER BY m.joined_at`,
+      [request.params.orgId],
+    );
+    return { data: rows };
+  });
+
   /**
    * Everybody in a workspace who holds a permission.
    *

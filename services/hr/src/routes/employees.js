@@ -145,6 +145,25 @@ export async function employeeRoutes(app) {
     },
   );
 
+  // ════════════════════════════════════════════════════ FROM THE WORKSPACE
+  /** People who can sign in to this workspace but have no employee record. */
+  app.get('/hr/employees/workspace-people', { preHandler: [app.loadContext, requirePermission('hr.employees.view')] }, async (request) => ({
+    data: await app.workspacePeople.unlinked(db, request.ctx.orgId),
+  }));
+
+  /** Make them employees: new records, or existing ones with their email, linked to their login. */
+  app.post(
+    '/hr/employees/from-people',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.employees.create')],
+      schema: { body: body({ user_ids: { type: 'array', items: v.id('usr'), minItems: 1, maxItems: 500 } }, ['user_ids']) },
+    },
+    async (request, reply) => {
+      const result = await app.workspacePeople.add(db, { orgId: request.ctx.orgId, actorId: request.ctx.userId, userIds: request.body.user_ids });
+      return reply.status(201).send({ data: result });
+    },
+  );
+
   // ═════════════════════════════════════════════════════════════════ CREATE
   app.post(
     '/hr/employees',

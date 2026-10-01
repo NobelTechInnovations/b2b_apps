@@ -19,5 +19,13 @@ export const config = defineConfig({
   smtpPort: env('number', { default: 587 }),
   smtpUser: env('string', { default: '' }),
   smtpPass: env('string', { default: '', secret: true }),
-  mailFrom: env('string', { default: 'Nexus <no-reply@localhost>' }),
+  // MAIL_FROM, or EMAIL_FROM as some hosts' templates call it.
+  mailFrom: env('string', { default: process.env.EMAIL_FROM || 'Nexus <no-reply@localhost>' }),
+  // ZeptoMail over HTTPS instead of SMTP. Needed where outbound SMTP is
+  // blocked — Railway's Free, Trial and Hobby plans block it. The token is the
+  // Mail Agent's "Send Mail token"; with it set, it is used ahead of SMTP.
+  emailProvider: env('string', { default: '' }),
+  zeptomailToken: env('string', { default: '', secret: true }),
+  // api.zeptomail.in for accounts in India, api.zeptomail.com elsewhere.
+  zeptomailApiUrl: env('string', { default: '' }),
 });
