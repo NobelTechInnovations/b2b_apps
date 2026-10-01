@@ -4,7 +4,7 @@ import { SourceTaskButton } from '@/components/tasks/source-task-button';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import {
-  Plus, Users, UserPlus, Clock, Mail, Phone, Network, LogOut, UserRound,
+  Plus, Users, UserPlus, Clock, Mail, Phone, Network, LogOut, UserRound, Pencil,
 } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/cn';
@@ -209,24 +209,27 @@ export default function EmployeesClient() {
 
       <EmployeeDrawer
         employeeId={selectedId}
+        departments={departments}
+        employees={employees}
         onClose={() => { setSelectedId(null); router.replace('/hr/employees'); }}
         onChanged={load}
       />
 
-      <CreateEmployeeModal
+      <EmployeeFormModal
         open={creating}
         departments={departments}
         employees={employees}
         onClose={() => { setCreating(false); router.replace('/hr/employees'); }}
-        onCreated={load}
+        onSaved={load}
       />
     </div>
   );
 }
 
-function EmployeeDrawer({ employeeId, onClose, onChanged }) {
+function EmployeeDrawer({ employeeId, departments, employees, onClose, onChanged }) {
   const toast = useToast();
   const [employee, setEmployee] = useState(null);
+  const [editing, setEditing] = useState(false);
   const [offboarding, setOffboarding] = useState(false);
   const [rehiring, setRehiring] = useState(false);
   const [rejoin, setRejoin] = useState({ joined_on: new Date().toISOString().slice(0, 10), status: 'active' });
@@ -294,9 +297,13 @@ function EmployeeDrawer({ employeeId, onClose, onChanged }) {
                   Re-hire
                 </Button>
               ) : (
-                <Button variant="danger-ghost" icon={LogOut} onClick={() => setOffboarding(true)}>
-                  Offboard
-                </Button>
+                <>
+                  <Button variant="danger-ghost" icon={LogOut} onClick={() => setOffboarding(true)}>
+                    Offboard
+                  </Button>
+                  <div className="flex-1" />
+                  <Button variant="primary" icon={Pencil} onClick={() => setEditing(true)}>Edit</Button>
+                </>
               )}
             </Can>
           )
@@ -423,6 +430,19 @@ function EmployeeDrawer({ employeeId, onClose, onChanged }) {
         )}
       </Drawer>
 
+      <EmployeeFormModal
+        open={editing}
+        employee={employee}
+        departments={departments}
+        employees={employees}
+        onClose={() => setEditing(false)}
+        onSaved={() => {
+          // Reload: the department and manager names come from the full record.
+          api.get(`/hr/employees/${employeeId}`).then((r) => setEmployee(r.data)).catch(() => {});
+          onChanged?.();
+        }}
+      />
+
       <Modal
         open={rehiring}
         onClose={() => setRehiring(false)}
@@ -475,30 +495,57 @@ function EmployeeDrawer({ employeeId, onClose, onChanged }) {
   );
 }
 
-function CreateEmployeeModal({ open, departments, employees, onClose, onCreated }) {
+const EDITABLE = ['first_name', 'last_name', 'email', 'phone', 'designation', 'department_id', 'manager_id',
+  'employment_type', 'joined_on', 'date_of_birth', 'status', 'notes'];
+
+/** Add an employee, or (with `employee`) change any of their details later. */
+function EmployeeFormModal({ open, employee, departments, employees, onClose, onSaved }) {
   const toast = useToast();
+  const editing = Boolean(employee?.id);
   const [form, setForm] = useState({ employment_type: 'full_time', status: 'active' });
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState(null);
 
+  useEffect(() => {
+    if (!open) return;
+    setErrors({});
+    setFormError(null);
+    setForm(editing
+      ? Object.fromEntries(EDITABLE.map((key) => [key, employee[key] ?? '']))
+      : { employment_type: 'full_time', status: 'active' });
+  }, [open, editing, employee]);
+
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
   async function submit(event) {
-    event.preventDefault();
+    event?.preventDefault();
     setBusy(true);
     setErrors({});
     setFormError(null);
     try {
-      const payload = { ...form };
-      for (const key of Object.keys(payload)) if (payload[key] === '') delete payload[key];
-
-      const response = await api.post('/hr/employees', payload);
-      toast.success(`${response.data.name} added`, {
-        description: `Employee code ${response.data.employee_code}. Leave balances opened.`,
-      });
-      setForm({ employment_type: 'full_time', status: 'active' });
-      onCreated();
+      let response;
+      if (editing) {
+        // Send what changed; an emptied box clears that detail.
+        const payload = {};
+        for (const key of EDITABLE) {
+          const before = employee[key] ?? '';
+          if (String(form[key] ?? '') === String(before)) continue;
+          payload[key] = form[key] === '' ? (['first_name', 'employment_type', 'status', 'joined_on'].includes(key) ? undefined : null) : form[key];
+        }
+        for (const key of Object.keys(payload)) if (payload[key] === undefined) delete payload[key];
+        if (!Object.keys(payload).length) { onClose(); return; }
+        response = await api.patch(`/hr/employees/${employee.id}`, payload);
+        toast.success(`${response.data.name} updated`);
+      } else {
+        const payload = { ...form };
+        for (const key of Object.keys(payload)) if (payload[key] === '') delete payload[key];
+        response = await api.post('/hr/employees', payload);
+        toast.success(`${response.data.name} added`, {
+          description: `Employee code ${response.data.employee_code}. Leave balances opened.`,
+        });
+      }
+      onSaved(response.data);
       onClose();
     } catch (err) {
       if (err instanceof ApiError) {
@@ -515,13 +562,13 @@ function CreateEmployeeModal({ open, departments, employees, onClose, onCreated 
     <Modal
       open={open}
       onClose={onClose}
-      title="Add employee"
-      description="Only a first name is required. The employee code is generated for you."
+      title={editing ? `Edit ${employee.name}` : 'Add employee'}
+      description={editing ? `Employee code ${employee.employee_code}.` : 'Only a first name is required. The employee code is generated for you.'}
       size="lg"
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant="primary" onClick={submit} loading={busy} icon={Plus}>Add employee</Button>
+          <Button variant="primary" onClick={submit} loading={busy} icon={editing ? Pencil : Plus}>{editing ? 'Save changes' : 'Add employee'}</Button>
         </>
       }
     >
@@ -565,7 +612,7 @@ function CreateEmployeeModal({ open, departments, employees, onClose, onCreated 
             {(p) => (
               <Select {...p} value={form.manager_id ?? ''} onChange={set('manager_id')} disabled={!employees.length}>
                 <option value="">No manager</option>
-                {employees.filter((e) => e.status !== 'exited').map((e) => (
+                {employees.filter((e) => e.status !== 'exited' && e.id !== employee?.id).map((e) => (
                   <option key={e.id} value={e.id}>{e.name}</option>
                 ))}
               </Select>
@@ -594,6 +641,8 @@ function CreateEmployeeModal({ open, departments, employees, onClose, onCreated 
               <Select {...p} value={form.status} onChange={set('status')}>
                 <option value="active">Active</option>
                 <option value="on_probation">On probation</option>
+                {editing && <option value="on_notice">On notice</option>}
+                {editing && <option value="on_leave">On long leave</option>}
               </Select>
             )}
           </Field>

@@ -23,6 +23,110 @@ export async function leaveRoutes(app) {
     },
   );
 
+  /**
+   * The workspace's leave policy: each type, how many days a year it gives,
+   * whether it is paid and carries forward. Changing the days can also update
+   * this year's balances — for everyone still on the policy's old number, so a
+   * balance HR adjusted for one person by hand is left alone.
+   */
+  const COLOURS = ['slate', 'rose', 'emerald', 'amber', 'blue', 'violet', 'cyan', 'orange', 'pink', 'teal', 'indigo', 'lime'];
+  const typeBody = {
+    name: v.text(60, 1),
+    code: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9]{0,7}$' },
+    days_per_year: { type: 'number', minimum: 0, maximum: 365, multipleOf: 0.5 },
+    is_paid: v.bool,
+    carry_forward: v.bool,
+    requires_approval: v.bool,
+    colour: v.enum(COLOURS),
+  };
+  const typeParams = { params: params({ leaveTypeId: v.id('lvt') }) };
+  const codeTaken = (error) => {
+    if (error.name === 'UniqueViolation') throw conflict('Another leave type already uses that short code.');
+    throw error;
+  };
+  const year = () => new Date().getFullYear();
+
+  app.post('/hr/leave-types', {
+    preHandler: [app.loadContext, requirePermission('hr.leave.manage')],
+    schema: { body: body(typeBody, ['name']) },
+  }, async (request, reply) => {
+    const { orgId } = request.ctx;
+    const b = request.body;
+    await ensureLeaveTypes(db, orgId);
+    const initials = b.name.trim().split(/\s+/).map((w) => w[0]).join('').replace(/[^A-Za-z0-9]/g, '').slice(0, 6);
+    const code = (b.code ?? (initials || 'LV')).toUpperCase();
+    const row = await db.transaction(async (tx) => {
+      const created = await tx.one(
+        `INSERT INTO leave_types (id, org_id, name, code, days_per_year, is_paid, carry_forward, requires_approval, colour, position)
+         VALUES ($1,$2,$3,$4,COALESCE($5,0),COALESCE($6,true),COALESCE($7,false),COALESCE($8,true),COALESCE($9,'slate'),
+                 (SELECT COALESCE(max(position) + 1, 0) FROM leave_types WHERE org_id = $2))
+         RETURNING *`,
+        [id('lvt'), orgId, b.name.trim(), code, b.days_per_year ?? null, b.is_paid ?? null, b.carry_forward ?? null,
+          b.requires_approval ?? null, b.colour ?? null],
+      );
+      // Everyone on the team starts this year with the new entitlement.
+      await tx.query(
+        `INSERT INTO leave_balances (org_id, employee_id, leave_type_id, year, entitled)
+         SELECT $1, e.id, $2, $3, $4 FROM employees e
+          WHERE e.org_id = $1 AND e.archived_at IS NULL AND e.status <> 'exited'
+         ON CONFLICT DO NOTHING`,
+        [orgId, created.id, year(), created.days_per_year],
+      );
+      return created;
+    }).catch(codeTaken);
+    return reply.status(201).send({ data: row });
+  });
+
+  app.patch('/hr/leave-types/:leaveTypeId', {
+    preHandler: [app.loadContext, requirePermission('hr.leave.manage')],
+    schema: { ...typeParams, body: body({ ...typeBody, update_balances: v.bool }) },
+  }, async (request) => {
+    const { orgId } = request.ctx;
+    const b = request.body;
+    const result = await db.transaction(async (tx) => {
+      const old = await tx.one(`SELECT * FROM leave_types WHERE org_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE`, [orgId, request.params.leaveTypeId]);
+      if (!old) throw notFound('Leave type');
+      const row = await tx.one(
+        `UPDATE leave_types SET name = COALESCE($3, name), code = COALESCE($4, code), days_per_year = COALESCE($5, days_per_year),
+                is_paid = COALESCE($6, is_paid), carry_forward = COALESCE($7, carry_forward),
+                requires_approval = COALESCE($8, requires_approval), colour = COALESCE($9, colour)
+          WHERE org_id = $1 AND id = $2 RETURNING *`,
+        [orgId, old.id, b.name?.trim() ?? null, b.code?.toUpperCase() ?? null, b.days_per_year ?? null, b.is_paid ?? null,
+          b.carry_forward ?? null, b.requires_approval ?? null, b.colour ?? null],
+      );
+      let balancesUpdated = 0;
+      if (b.update_balances !== false && Number(row.days_per_year) !== Number(old.days_per_year)) {
+        const updated = await tx.rows(
+          `UPDATE leave_balances lb SET entitled = $4, updated_at = now()
+             FROM employees e
+            WHERE lb.org_id = $1 AND lb.leave_type_id = $2 AND lb.year = $3 AND lb.entitled = $5
+              AND e.id = lb.employee_id AND e.archived_at IS NULL AND e.status <> 'exited'
+           RETURNING lb.employee_id`,
+          [orgId, old.id, year(), row.days_per_year, old.days_per_year],
+        );
+        balancesUpdated = updated.length;
+      }
+      return { ...row, balances_updated: balancesUpdated };
+    }).catch(codeTaken);
+    return { data: result };
+  });
+
+  // Retiring a type hides it from new requests; past requests and balances stay.
+  app.delete('/hr/leave-types/:leaveTypeId', {
+    preHandler: [app.loadContext, requirePermission('hr.leave.manage')],
+    schema: typeParams,
+  }, async (request) => {
+    const { orgId } = request.ctx;
+    const left = await db.one(`SELECT count(*)::int AS n FROM leave_types WHERE org_id = $1 AND archived_at IS NULL`, [orgId]);
+    if (left.n <= 1) throw badRequest('Keep at least one leave type.');
+    const row = await db.one(
+      `UPDATE leave_types SET archived_at = now() WHERE org_id = $1 AND id = $2 AND archived_at IS NULL RETURNING id`,
+      [orgId, request.params.leaveTypeId],
+    );
+    if (!row) throw notFound('Leave type');
+    return { data: { archived: true } };
+  });
+
   // ═══════════════════════════════════════════════════════════════ REQUESTS
   app.get(
     '/hr/leave',

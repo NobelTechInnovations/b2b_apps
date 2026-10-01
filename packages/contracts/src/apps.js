@@ -805,6 +805,8 @@ export const APPS = [
       'hr.shifts.view', 'hr.shifts.manage',
       'hr.devices.view', 'hr.devices.manage',
       'hr.leave.view', 'hr.leave.create', 'hr.leave.approve',
+      // Leave types and how many days each gives. Owners and admins.
+      'hr.leave.manage',
       'hr.documents.view', 'hr.documents.manage',
       'hr.performance.view', 'hr.performance.manage', 'hr.performance.review',
       // The employee portal. Every one of these resolves the person from the

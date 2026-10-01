@@ -1,6 +1,7 @@
 import { id, paginate } from '@nexus/db-kit';
 import {
   requirePermission, body, query, params, validate as v, notFound, badRequest, conflict,
+  nullable,
 } from '@nexus/service-kit';
 import { EVENTS } from '@nexus/contracts/events';
 import { ensureLeaveTypes } from '../lib/setup.js';
@@ -230,17 +231,18 @@ export async function employeeRoutes(app) {
       preHandler: [app.loadContext, requirePermission('hr.employees.edit')],
       schema: {
         params: params({ employeeId: v.id('emp') }),
+        // `null` clears a field: no department, no manager, no phone.
         body: body({
-          first_name: v.text(80, 1), last_name: v.text(80), email: v.email,
-          personal_email: v.email, phone: v.text(32), date_of_birth: v.date,
-          gender: v.enum(['female', 'male', 'other', 'undisclosed']),
-          department_id: v.id('dep'), designation: v.text(120), manager_id: v.id('emp'),
+          first_name: v.text(80, 1), last_name: nullable(v.text(80, 0)), email: nullable(v.email),
+          personal_email: nullable(v.email), phone: nullable(v.text(32, 0)), date_of_birth: nullable(v.date),
+          gender: nullable(v.enum(['female', 'male', 'other', 'undisclosed'])),
+          department_id: nullable(v.id('dep')), designation: nullable(v.text(120, 0)), manager_id: nullable(v.id('emp')),
           employment_type: v.enum(['full_time', 'part_time', 'contract', 'intern', 'consultant']),
           status: v.enum(['active', 'on_probation', 'on_notice', 'on_leave']),
-          work_location: v.text(120), joined_on: v.date, probation_ends_on: v.date,
+          work_location: nullable(v.text(120, 0)), joined_on: v.date, probation_ends_on: nullable(v.date),
           address: { type: 'object', additionalProperties: true },
           emergency_contact: { type: 'object', additionalProperties: true },
-          notes: v.longText,
+          notes: nullable(v.longText),
         }),
       },
     },
