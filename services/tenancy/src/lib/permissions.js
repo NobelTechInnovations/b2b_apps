@@ -78,6 +78,7 @@ export async function seedSystemRoles(tx, orgId) {
  * gateway, so buying HR is what makes HR permissions real.
  */
 export async function resolveMemberPermissions(db, { orgId, memberId }) {
+  const access = await db.one(`SELECT app_access FROM members WHERE id = $1 AND org_id = $2`, [memberId, orgId]);
   const roleRows = await db.rows(
     `SELECT r.id, r.slug AS role_slug, r.implicit_all, r.permission_patterns, r.denied_patterns
        FROM member_roles mr
@@ -90,7 +91,7 @@ export async function resolveMemberPermissions(db, { orgId, memberId }) {
   const isOwner = roleRows.some((r) => r.implicit_all);
 
   if (isOwner) {
-    return { roles, permissions: new Set(allPermissions()), isOwner: true };
+    return { roles, permissions: new Set(allPermissions()), isOwner: true, appAccess: null };
   }
 
   const grantRows = roleRows.length
@@ -126,7 +127,26 @@ export async function resolveMemberPermissions(db, { orgId, memberId }) {
   for (const row of direct) if (row.effect === 'allow') permissions.add(row.permission);
   for (const row of direct) if (row.effect === 'deny') permissions.delete(row.permission);
 
-  return { roles, permissions, isOwner: false };
+  // Administrators run the workspace, so no app is hidden from them.
+  const appAccess = roles.includes('admin') ? null : access?.app_access ?? null;
+  return { roles, permissions: limitToApps(permissions, appAccess), isOwner: false, appAccess };
+}
+
+/** Never limited by app access: the workspace itself, and billing. */
+const WORKSPACE_APPS = new Set(['core', 'billing', 'catalog']);
+
+/**
+ * Drop permissions for apps this person was not given. Their own records
+ * (`<app>.self.*`: payslips, leave, attendance) stay, because those are
+ * about them rather than about the app.
+ */
+export function limitToApps(permissions, appAccess) {
+  if (!appAccess) return permissions;
+  const allowed = new Set(appAccess);
+  return new Set([...permissions].filter((permission) => {
+    const [appSlug, resource] = permission.split('.');
+    return WORKSPACE_APPS.has(appSlug) || allowed.has(appSlug) || resource === 'self';
+  }));
 }
 
 /** Any change to who-can-do-what bumps the epoch, invalidating live tokens. */

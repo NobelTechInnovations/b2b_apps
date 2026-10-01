@@ -1,7 +1,9 @@
 import { ApiError, forbidden, unauthorized, notFound } from '@nexus/service-kit';
+import { appBySlug } from '@nexus/contracts';
+import { memberApps } from '../lib/authz.js';
 
-/** Namespaces whose writes change entitlements or installed apps. */
-const COMMERCE_NAMESPACES = new Set(['subscriptions', 'apps']);
+/** Namespaces whose writes change entitlements, installed apps, or who may open what. */
+const COMMERCE_NAMESPACES = new Set(['subscriptions', 'apps', 'members', 'roles']);
 
 /**
  * The gate.
@@ -115,11 +117,18 @@ export async function proxyRoutes(app) {
       throw new ApiError(403, 'app_not_installed', `Install ${route.app} before using it.`, { app: route.app });
     }
 
+    // The company has the app; has this person been given it?
+    const yourApps = memberApps(activeApps, authorization);
+    if (route.app && !yourApps.has(route.app)) {
+      const name = appBySlug(route.app)?.name ?? route.app;
+      throw new ApiError(403, 'app_not_assigned', `You don't have access to ${name}. Ask a workspace owner or admin to give it to you.`, { app: route.app });
+    }
+
     // Only permissions for entitled apps travel downstream — buying HR is what
     // makes HR permissions real, even if a role still lists them.
     const effective = [...authorization.permissions].filter((permission) => {
       const appSlug = permission.split('.')[0];
-      return ['core', 'billing', 'catalog'].includes(appSlug) || activeApps.has(appSlug);
+      return ['core', 'billing', 'catalog'].includes(appSlug) || yourApps.has(appSlug);
     });
 
     // A write to billing or catalog changes the answer to gate 2 or 3. The bus
@@ -135,7 +144,7 @@ export async function proxyRoutes(app) {
     headers['x-nexus-member'] = authorization.memberId;
     headers['x-nexus-roles'] = authorization.roles.join(',');
     headers['x-nexus-perms'] = effective.join(',');
-    headers['x-nexus-apps'] = [...activeApps].join(',');
+    headers['x-nexus-apps'] = [...yourApps].join(',');
 
     return reply.from(`${upstream}${target}`, {
       rewriteRequestHeaders: (req, original) => ({ ...stripInjected(original), ...headers }),

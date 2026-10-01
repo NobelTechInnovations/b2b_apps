@@ -73,6 +73,8 @@ export async function internalRoutes(app) {
         roles: resolved.roles,
         is_owner: resolved.isOwner,
         permissions: [...resolved.permissions],
+        // null: every app the workspace has. Otherwise the apps this person may open.
+        app_access: resolved.appAccess,
       },
     };
   });

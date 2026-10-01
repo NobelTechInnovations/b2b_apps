@@ -53,7 +53,7 @@ export default function LeadsClient() {
   const router = useRouter();
   const params = useSearchParams();
   const toast = useToast();
-  const { can } = useWorkspace();
+  const { can, hasApp } = useWorkspace();
 
   const [leads, setLeads] = useState([]);
   const [meta, setMeta] = useState(null);
@@ -122,6 +122,12 @@ export default function LeadsClient() {
           </Can>
         }
       />
+
+      {hasApp('leads') && (
+        <Alert tone="info" icon={Phone} action={<a href="/leads"><Button size="xs" variant="secondary">Open Leads</Button></a>}>
+          These are the same leads as in the Leads app, which adds follow-up reminders, call logging and imports.
+        </Alert>
+      )}
 
       {stats && (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

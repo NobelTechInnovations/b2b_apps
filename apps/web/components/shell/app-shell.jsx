@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import Link from 'next/link';
+import { Lock } from 'lucide-react';
+import { appBySlug } from '@nexus/contracts';
 import { WorkspaceProvider } from '@/lib/workspace';
+import { Button } from '@/components/ui/button';
+import { Card, EmptyState } from '@/components/ui/primitives';
 import { Sidebar } from './sidebar';
 import { Topbar } from './topbar';
 import { CommandPalette } from './command-palette';
@@ -47,12 +53,38 @@ export function AppShell({ workspace, organizations, children }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar organizations={organizations} onOpenSearch={() => setPaletteOpen(true)} />
           <main className="flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-[1400px] px-6 py-6 lg:px-8">{children}</div>
+            <div className="mx-auto max-w-[1400px] px-6 py-6 lg:px-8">
+              <AppAccessGuard workspace={workspace}>{children}</AppAccessGuard>
+            </div>
           </main>
         </div>
       </div>
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </WorkspaceProvider>
+  );
+}
+
+/**
+ * The workspace has the app, but this person was not given it. The gateway
+ * refuses their requests either way; this says why instead of showing a
+ * screen full of errors.
+ */
+function AppAccessGuard({ workspace, children }) {
+  const pathname = usePathname();
+  const app = appBySlug(pathname?.split('/')[1]);
+  const blocked = app && !app.core
+    && (workspace?.workspace_apps ?? []).includes(app.slug)
+    && !(workspace?.apps ?? []).includes(app.slug);
+  if (!blocked) return children;
+  return (
+    <Card className="mx-auto mt-10 max-w-lg">
+      <EmptyState
+        icon={Lock}
+        title={`You don't have access to ${app.name}`}
+        description="Your workspace uses this app, but it hasn't been shared with you. Ask a workspace owner or admin to give you access in Settings → People."
+        action={<Link href="/dashboard"><Button variant="secondary">Back to dashboard</Button></Link>}
+      />
+    </Card>
   );
 }

@@ -158,7 +158,7 @@ export async function createService({
 }
 
 /** Boot with graceful shutdown wired up. */
-export async function startService(app, { port, host = '0.0.0.0', name }) {
+export async function startService(app, { port, host = process.env.SERVICE_BIND_HOST ?? '0.0.0.0', name }) {
   let closing = false;
 
   const close = async (signal) => {

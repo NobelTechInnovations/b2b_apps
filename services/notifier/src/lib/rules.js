@@ -22,6 +22,15 @@ export function shortDate(value) {
   return `${day} ${MONTHS[month - 1]}`;
 }
 
+const FOLLOWUP_VERB = { call: 'Call', whatsapp: 'WhatsApp', email: 'Email', meeting: 'Meeting with', visit: 'Visit', task: 'Follow up with' };
+
+/** `at 3:30 pm`, in India time — the follow-up reminder's moment. */
+function clockTime(value) {
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return '';
+  return `at ${at.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' })}`;
+}
+
 const span = (from, to) =>
   (!to || from === to ? shortDate(from) : `${shortDate(from)} – ${shortDate(to)}`);
 
@@ -182,6 +191,30 @@ export const RULES = {
     kind: 'expense.reimbursed', app: 'expenses', users: [d.user_id],
     title: `₹${d.total} reimbursed for ${d.number}`, body: d.title,
     link: `/expenses?claim=${d.claim_id}`,
+  }],
+
+  // ── leads ─────────────────────────────────────────────────────────────
+  [EVENTS.LEAD_ASSIGNED]: (d) => (d.owner_user_id ? [{
+    kind: 'leads.assigned', app: 'leads', users: [d.owner_user_id],
+    title: d.count > 1 ? `${d.count} new leads were assigned to you` : `New lead assigned to you: ${d.name ?? 'a lead'}`,
+    body: d.via ? `From ${d.via}` : null,
+    link: d.count > 1 || !d.lead_id ? '/leads?owner=me&fresh=1' : `/leads?open=${d.lead_id}`,
+  }] : []),
+  [EVENTS.LEAD_FOLLOWUP_DUE]: (d) => (d.assigned_to ? [{
+    kind: 'leads.followup_due', app: 'leads', users: [d.assigned_to],
+    title: `${FOLLOWUP_VERB[d.kind] ?? 'Follow up with'} ${d.name} ${clockTime(d.due_at)}`.trim(),
+    body: [d.phone, d.company_name, d.note].filter(Boolean).join(' · ') || null,
+    link: `/leads?open=${d.lead_id}`,
+  }] : []),
+  [EVENTS.LEADS_IMPORTED]: (d) => (d.created_by ? [{
+    kind: 'leads.imported', app: 'leads', users: [d.created_by],
+    title: `${d.created} leads imported`, body: [d.via, d.duplicates ? `${d.duplicates} duplicates skipped` : null].filter(Boolean).join(' · ') || null,
+    link: '/leads',
+  }] : []),
+  [EVENTS.LEAD_SOURCE_FAILED]: (d) => [{
+    kind: 'leads.source_failed', app: 'leads', users: { permission: 'leads.settings.manage' },
+    title: `${d.name} stopped bringing in leads`, body: d.error ?? null,
+    link: '/leads/sources',
   }],
 
   // ── forms ─────────────────────────────────────────────────────────────

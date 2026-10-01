@@ -30,8 +30,8 @@ test('platform permission and lifecycle regressions', async (t) => {
     assert.equal(basic.invoices.filter((i) => i.status === 'open').length, 1, 'exactly one open term invoice');
   });
   await t.test('unbuilt apps cannot be quoted or purchased', async () => {
-    assert.equal((await owner.call('/subscriptions/quote', 'POST', { plan: 'business', app_slugs: ['manufacturing'] })).status, 400);
-    assert.equal((await owner.call('/subscriptions/current/apps', 'POST', { app_slug: 'accounting' })).status, 400);
+    assert.equal((await owner.call('/subscriptions/quote', 'POST', { plan: 'business', app_slugs: ['fieldservice'] })).status, 400);
+    assert.equal((await owner.call('/subscriptions/current/apps', 'POST', { app_slug: 'bi' })).status, 400);
   });
   await t.test('uninstall disables API; reinstall restores access', async () => {
     ok(await owner.call('/apps/crm/uninstall', 'POST', {}));

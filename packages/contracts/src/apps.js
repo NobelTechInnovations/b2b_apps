@@ -204,6 +204,45 @@ export const APPS = [
     dependencies: [],
   },
   {
+    slug: 'leads',
+    name: 'Leads',
+    tagline: 'Every enquiry called, followed up and closed',
+    description:
+      'One place for every lead, from Meta ads, Google Sheets, CSV files, survey forms and your website. Log each call in seconds, schedule the next follow-up, and get reminded before it is due. Add the fields your business needs.',
+    category: 'sales',
+    icon: 'PhoneCall',
+    color: 'emerald',
+    // Hosted by CRM: a lead is one record, whether it is worked here or
+    // converted into a CRM customer.
+    service: 'crm',
+    price: price(499),
+    flagship: true,
+    highlights: ['Follow-up reminders', 'One-tap call logging', 'Custom lead fields', 'Meta, Sheets & CSV import'],
+    features: ['leads.leads', 'leads.followups', 'leads.calls', 'leads.fields', 'leads.import', 'leads.sources'],
+    permissions: [
+      'leads.leads.view', 'leads.leads.create', 'leads.leads.edit', 'leads.leads.delete', 'leads.leads.export',
+      // Bulk intake and handing leads out. Owners and admins by default.
+      'leads.leads.import', 'leads.leads.assign',
+      // Everyone's leads, not just your own.
+      'leads.team.manage',
+      'leads.followups.view', 'leads.followups.create', 'leads.followups.edit',
+      'leads.calls.log',
+      'leads.settings.manage',
+    ],
+    nav: [
+      { label: 'Leads', path: '/leads', icon: 'Users', permission: 'leads.leads.view' },
+      { label: 'Follow-ups', path: '/leads/followups', icon: 'BellRing', permission: 'leads.followups.view' },
+      { label: 'Import', path: '/leads/import', icon: 'Upload', permission: 'leads.leads.import' },
+      { label: 'Lead sources', path: '/leads/sources', icon: 'Plug', permission: 'leads.settings.manage' },
+      { label: 'Fields & stages', path: '/leads/settings', icon: 'SlidersHorizontal', permission: 'leads.settings.manage' },
+    ],
+    widgets: [
+      { id: 'leads.followups_today', title: 'Follow-ups today', size: 'sm', permission: 'leads.followups.view' },
+      { id: 'leads.new_today', title: 'New leads today', size: 'sm', permission: 'leads.leads.view' },
+    ],
+    dependencies: [],
+  },
+  {
     slug: 'quotes',
     name: 'Quotations & Orders',
     tagline: 'From quote to signed order',
@@ -1237,7 +1276,7 @@ export const APPS = [
 
 // Release availability is explicit: catalogue descriptions are not shipped services.
 const RELEASED_APPS = new Set([
-  'core', 'crm', 'hr', 'payroll', 'documents', 'invoicing', 'tasks',
+  'core', 'crm', 'leads', 'hr', 'payroll', 'documents', 'invoicing', 'tasks',
   'helpdesk', 'knowledge', 'recruitment', 'expenses', 'surveys',
   'erp', 'manufacturing', 'quality', 'maintenance', 'pos', 'ecommerce',
   'accounting', 'assets', 'recurring',
@@ -1254,11 +1293,12 @@ const PAIRINGS = {
   hr: { autoSelect: ['payroll'], related: ['tasks', 'recruitment', 'expenses'] },
   payroll: { autoSelect: [], related: ['hr', 'documents'] },
   recruitment: { autoSelect: [], related: ['hr', 'documents'] },
-  crm: { autoSelect: ['invoicing'], related: ['tasks', 'surveys', 'helpdesk'] },
+  crm: { autoSelect: ['invoicing'], related: ['leads', 'tasks', 'surveys', 'helpdesk'] },
+  leads: { autoSelect: [], related: ['surveys', 'crm', 'tasks'] },
   helpdesk: { autoSelect: ['knowledge'], related: ['crm', 'tasks'] },
   knowledge: { autoSelect: [], related: ['helpdesk'] },
   expenses: { autoSelect: [], related: ['payroll', 'hr'] },
-  surveys: { autoSelect: [], related: ['crm'] },
+  surveys: { autoSelect: [], related: ['leads', 'crm'] },
   invoicing: { autoSelect: [], related: ['crm', 'accounting'] },
   tasks: { autoSelect: [], related: ['documents', 'crm', 'hr'] },
   documents: { autoSelect: [], related: ['tasks', 'hr'] },

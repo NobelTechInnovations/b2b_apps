@@ -69,10 +69,53 @@ subdomain, and no CORS list has to know each company's address.
    to copy. Gmail sends about 500 messages a day (2,000 on Google Workspace), so
    keep marketing campaigns small or move to a transactional provider later.
 
+   **Leads app, optional:** `META_APP_SECRET` and `META_VERIFY_TOKEN` turn on
+   real-time Meta (Facebook/Instagram) lead ads. In the Meta app's Webhooks
+   settings, subscribe the Page `leadgen` field to
+   `https://yourdomain.com/api/lead-hooks/meta` with the same verify token.
+   Without them, connected Pages are polled every 15 minutes, which needs
+   nothing set here. Google Sheets and webhook sources need no settings.
+
    Leave `BILLING_TEST_MODE` unset in production. Generate secrets with
    `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
 5. Give the service a domain (Railway's `*.up.railway.app` is fine, or
    `api.yourdomain.com`). Note it for Vercel.
+
+### Hostinger managed Node hosting
+
+The normal runner starts 15 child services and does not itself call `listen()`.
+Hostinger's managed runtime requires the entry process to call `listen()` within
+3 seconds. Enable the startup proxy so that process binds immediately while the
+services start. The proxy returns JSON with HTTP 503 until the gateway is available;
+it never returns a synthetic successful health check.
+
+Use these deployment settings:
+
+| Setting | Value |
+|---|---|
+| Framework | Other |
+| Root directory | `./` |
+| Node version | `22.x` |
+| Package manager | pnpm |
+| Build command | None |
+| Output directory | `.` |
+| Entry file | `scripts/start-api.js` |
+
+Set `API_STARTUP_PROXY=true`, `PORT=3000`, and `NODE_ENV=production`, along with
+the database, bus, authentication, and other API variables above. Save and redeploy
+the commit containing the proxy. The gateway uses internal port 4000; all child
+services bind to loopback. The startup proxy runs in the existing parent process,
+so it does not add a process.
+
+Check `/healthz` for the gateway's JSON response after startup. Once it works,
+set Vercel's `API_URL` to this API's HTTPS origin and redeploy Vercel.
+
+This mode fixes the listen deadline, **not resource limits**. An `EAGAIN` spawn
+error means the host refused a new process. Check Max processes, memory, and
+the account's process/thread limits with Hostinger support. If the plan cannot
+run all 15 services, use a VPS with the existing Dockerfile or a container host.
+Also configure persistent document storage before accepting uploads; a managed
+deployment's release directory is not a durable uploads volume.
 
 ## 3. Vercel — the web app
 

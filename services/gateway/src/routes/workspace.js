@@ -1,4 +1,5 @@
 import { APPS, APP_CATEGORIES, PORTAL_ROLES } from '@nexus/contracts';
+import { memberApps } from '../lib/authz.js';
 
 /**
  * GET /api/me/workspace — one call that boots the entire frontend.
@@ -39,11 +40,14 @@ export async function workspaceRoutes(app) {
     // see at least one thing in it.
     const can = (permission) => authorization.isOwner || authorization.permissions.has(permission);
 
+    // ...and this person has been given it.
+    const activeApps = new Set([...entitlements.apps].filter((slug) => installed.has(slug)));
+    const yourApps = memberApps(activeApps, authorization);
+
     const visible = APPS.filter(
       (definition) =>
         !definition.core &&
-        entitlements.apps.has(definition.slug) &&
-        installed.has(definition.slug) &&
+        yourApps.has(definition.slug) &&
         (definition.nav ?? []).some((item) => !item.permission || can(item.permission)),
     );
 
@@ -93,12 +97,17 @@ export async function workspaceRoutes(app) {
           roles: authorization.roles,
           is_owner: authorization.isOwner,
           portal_only: portalOnly,
+          // null: every app. Otherwise only these were given to them.
+          app_access: authorization.appAccess,
         },
         portal_only: portalOnly,
         self_service: selfService,
         needs_onboarding: false,
         subscription: entitlements.subscription,
-        apps: [...entitlements.apps].filter((slug) => slug !== 'core'),
+        // The apps this person can use. The workspace's full set is
+        // `workspace_apps`, for screens that manage who gets what.
+        apps: [...entitlements.apps].filter((slug) => slug !== 'core' && (authorization.isOwner || !authorization.appAccess || yourApps.has(slug))),
+        workspace_apps: [...entitlements.apps].filter((slug) => slug !== 'core'),
         installed: [...installed],
         navigation,
         widgets,

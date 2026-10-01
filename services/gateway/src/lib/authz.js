@@ -68,6 +68,8 @@ export function createAuthz({ tenancyUrl, billingUrl, catalogUrl, serviceToken, 
         roles: data.roles,
         isOwner: data.is_owner,
         permissions: new Set(data.permissions),
+        // null: every app the workspace has; otherwise the apps they may open.
+        appAccess: data.app_access ?? null,
         epoch: data.epoch,
       };
 
@@ -104,4 +106,16 @@ export function createAuthz({ tenancyUrl, billingUrl, catalogUrl, serviceToken, 
 
     stats: () => ({ permissions: permissionCache.size, entitlements: entitlementCache.size, installed: installedCache.size }),
   };
+}
+
+/**
+ * The apps one person may open: switched on for the workspace AND given to
+ * them. An app whose only permissions left are their own records (HR's
+ * payslips, say) stays open so self-service keeps working.
+ */
+export function memberApps(activeApps, authorization) {
+  if (authorization.isOwner || !authorization.appAccess) return new Set(activeApps);
+  const given = new Set(authorization.appAccess);
+  const held = new Set([...authorization.permissions].map((permission) => permission.split('.')[0]));
+  return new Set([...activeApps].filter((slug) => given.has(slug) || held.has(slug)));
 }

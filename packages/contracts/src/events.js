@@ -46,6 +46,12 @@ export const EVENTS = {
   CUSTOMER_CREATED: 'crm.customer.created',
   CUSTOMER_UPDATED: 'crm.customer.updated',
 
+  // ── leads ───────────────────────────────────────────────────────────────
+  LEAD_ASSIGNED: 'leads.lead.assigned',
+  LEADS_IMPORTED: 'leads.import.completed',
+  LEAD_FOLLOWUP_DUE: 'leads.followup.due',
+  LEAD_SOURCE_FAILED: 'leads.source.failed',
+
   // ── hr ──────────────────────────────────────────────────────────────────
   EMPLOYEE_CREATED: 'hr.employee.created',
   EMPLOYEE_UPDATED: 'hr.employee.updated',

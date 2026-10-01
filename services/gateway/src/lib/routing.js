@@ -31,6 +31,9 @@ const PLATFORM_ROUTES = [
   { prefix: 'quote-view',    service: 'crm',      public: true },
   { prefix: 'partner-portal', service: 'crm',     public: true },
   { prefix: 'mkt',           service: 'crm',      public: true },
+  // Leads pushed in by other systems (a source's own link) and Meta's lead
+  // webhook (checked against the app secret's signature).
+  { prefix: 'lead-hooks',    service: 'crm',      public: true },
   { prefix: 'teams',         service: 'tenancy' },
   { prefix: 'apps',          service: 'catalog' },
   { prefix: 'plans',         service: 'billing',  public: true },

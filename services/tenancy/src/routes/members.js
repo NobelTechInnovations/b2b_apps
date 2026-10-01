@@ -1,7 +1,22 @@
 import { paginate } from '@nexus/db-kit';
 import { requirePermission, body, query, validate as v, notFound, forbidden, badRequest } from '@nexus/service-kit';
 import { EVENTS } from '@nexus/contracts/events';
+import { APPS } from '@nexus/contracts';
 import { bumpEpoch, resolveMemberPermissions } from '../lib/permissions.js';
+
+const APP_SLUGS = APPS.filter((a) => !a.core).map((a) => a.slug);
+
+/** `null` (every app) or a clean list of known app slugs. */
+export function cleanAppAccess(value) {
+  if (value === null || value === undefined) return value ?? null;
+  const unknown = value.filter((slug) => !APP_SLUGS.includes(slug));
+  if (unknown.length) throw badRequest(`Unknown app: ${unknown.join(', ')}.`);
+  return [...new Set(value)].sort();
+}
+
+export const appAccessSchema = {
+  anyOf: [{ type: 'array', items: { type: 'string', pattern: '^[a-z][a-z0-9_-]{1,39}$' }, maxItems: 100 }, { type: 'null' }],
+};
 
 export async function memberRoutes(app) {
   const { db, identity } = app;
@@ -184,6 +199,45 @@ export async function memberRoutes(app) {
     },
   );
 
+  // ═════════════════════════════════════════════════════════════ APP ACCESS
+  /**
+   * Which of the workspace's apps this person may open. `null` gives them
+   * every app; owners and administrators always have every app anyway.
+   */
+  app.put(
+    '/members/:memberId/apps',
+    {
+      preHandler: [app.loadContext, requirePermission('core.roles.manage')],
+      schema: {
+        params: { type: 'object', properties: { memberId: v.id('mem') }, required: ['memberId'] },
+        body: body({ app_access: appAccessSchema }, ['app_access']),
+      },
+    },
+    async (request) => {
+      const { orgId, userId } = request.ctx;
+      const appAccess = cleanAppAccess(request.body.app_access);
+
+      const updated = await db.transaction(async (tx) => {
+        const row = await tx.one(
+          `UPDATE members SET app_access = $3 WHERE id = $1 AND org_id = $2 AND status <> 'removed' RETURNING *`,
+          [request.params.memberId, orgId, appAccess],
+        );
+        if (!row) throw notFound('Member');
+        await bumpEpoch(tx, orgId);
+        tx.emit({
+          type: EVENTS.MEMBER_ROLE_CHANGED,
+          org_id: orgId,
+          actor_id: userId,
+          data: { member_id: row.id, user_id: row.user_id, app_access: appAccess },
+        });
+        return row;
+      });
+
+      const profiles = await identity.users({ ids: [updated.user_id] });
+      return { data: shape(updated, profiles.get(updated.user_id)) };
+    },
+  );
+
   // ══════════════════════════════════════════════════════════════════ EDIT
   app.patch(
     '/members/:memberId',
@@ -281,6 +335,7 @@ function shape(member, profile) {
     title: member.title,
     status: member.status,
     roles: member.roles ?? [],
+    app_access: member.app_access ?? null,
     joined_at: member.joined_at,
     last_seen_at: member.last_seen_at,
     created_at: member.created_at,

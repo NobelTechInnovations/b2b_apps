@@ -4,6 +4,7 @@ import { requirePermission, body, validate as v, notFound, badRequest, conflict 
 import { EVENTS } from '@nexus/contracts/events';
 import { assertSeatAvailable } from '../lib/seats.js';
 import { workspaceUrl } from '../lib/addresses.js';
+import { cleanAppAccess, appAccessSchema } from './members.js';
 
 const hashToken = (raw) => createHash('sha256').update(raw).digest('hex');
 
@@ -15,7 +16,7 @@ export async function invitationRoutes(app) {
     { preHandler: [app.loadContext, requirePermission('core.members.view')] },
     async (request) => {
       const rows = await db.rows(
-        `SELECT i.id, i.email, i.title, i.status, i.expires_at, i.created_at, i.invited_by,
+        `SELECT i.id, i.email, i.title, i.status, i.expires_at, i.created_at, i.invited_by, i.app_access,
                 COALESCE((SELECT json_agg(json_build_object('id', r.id, 'slug', r.slug, 'name', r.name))
                             FROM roles r WHERE r.id = ANY(i.role_ids)), '[]') AS roles
            FROM invitations i
@@ -38,6 +39,8 @@ export async function invitationRoutes(app) {
             role_ids: { type: 'array', items: v.id('rol'), minItems: 1, maxItems: 20 },
             title: v.text(80),
             message: v.text(500),
+            // Which apps they may open once they join. Left out: every app.
+            app_access: appAccessSchema,
           },
           ['email', 'role_ids'],
         ),
@@ -46,6 +49,7 @@ export async function invitationRoutes(app) {
     async (request, reply) => {
       const { orgId, userId } = request.ctx;
       const email = request.body.email.trim().toLowerCase();
+      const appAccess = cleanAppAccess(request.body.app_access);
 
       const roles = await db.rows(`SELECT * FROM roles WHERE id = ANY($1) AND org_id = $2`, [
         request.body.role_ids,
@@ -82,12 +86,12 @@ export async function invitationRoutes(app) {
 
         const created = await tx.one(
           `INSERT INTO invitations
-             (id, org_id, email, token_hash, role_ids, title, message, invited_by, expires_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + interval '14 days')
+             (id, org_id, email, token_hash, role_ids, title, message, invited_by, expires_at, app_access)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + interval '14 days', $9)
            RETURNING *`,
           [
             id('inv'), orgId, email, hashToken(raw), request.body.role_ids,
-            request.body.title ?? null, request.body.message ?? null, userId,
+            request.body.title ?? null, request.body.message ?? null, userId, appAccess,
           ],
         );
 
@@ -120,6 +124,7 @@ export async function invitationRoutes(app) {
           status: invitation.status,
           expires_at: invitation.expires_at,
           roles: roles.map((r) => ({ id: r.id, slug: r.slug, name: r.name })),
+          app_access: invitation.app_access,
           // Returned once, for "copy invite link". Never stored in plaintext.
           invite_link: workspaceUrl(config, invitation.org_slug, `/join?token=${raw}`),
         },
@@ -235,13 +240,13 @@ export async function acceptInvitation(db, { token, userId, email }) {
 
     if (member) {
       member = await tx.one(
-        `UPDATE members SET status = 'active', title = COALESCE($3, title) WHERE id = $1 AND org_id = $2 RETURNING *`,
-        [member.id, invitation.org_id, invitation.title],
+        `UPDATE members SET status = 'active', title = COALESCE($3, title), app_access = $4 WHERE id = $1 AND org_id = $2 RETURNING *`,
+        [member.id, invitation.org_id, invitation.title, invitation.app_access],
       );
     } else {
       member = await tx.one(
-        `INSERT INTO members (id, org_id, user_id, status, title) VALUES ($1, $2, $3, 'active', $4) RETURNING *`,
-        [id('mem'), invitation.org_id, userId, invitation.title],
+        `INSERT INTO members (id, org_id, user_id, status, title, app_access) VALUES ($1, $2, $3, 'active', $4, $5) RETURNING *`,
+        [id('mem'), invitation.org_id, userId, invitation.title, invitation.app_access],
       );
     }
 

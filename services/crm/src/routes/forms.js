@@ -5,9 +5,12 @@ import {
 } from '@nexus/service-kit';
 import { EVENTS } from '@nexus/contracts/events';
 import { insertLead } from '../lib/leads.js';
+import { activeFields, cleanCustom } from '../lib/lead-fields.js';
+import { phoneKey } from '../lib/lead-intake.js';
 
 const FIELD_TYPES = ['short_text', 'long_text', 'email', 'phone', 'number', 'date', 'select', 'multi_select', 'checkbox'];
-const MAPS_TO = ['full_name', 'first_name', 'last_name', 'email', 'phone', 'company_name', 'job_title', 'notes'];
+// A lead's own columns, or one of the workspace's lead fields (`custom.budget`).
+const MAPS_TO = { type: 'string', pattern: '^(full_name|first_name|last_name|email|phone|company_name|job_title|city|notes|custom\\.[a-z][a-z0-9_]{0,39})$' };
 const nullable = (schema) => ({ anyOf: [schema, { type: 'null' }] });
 const newToken = () => randomBytes(12).toString('base64url');
 
@@ -17,7 +20,7 @@ const fieldSchema = body({
   type: v.enum(FIELD_TYPES),
   required: v.bool,
   options: { type: 'array', items: v.text(120, 1), maxItems: 50 },
-  maps_to: nullable(v.enum(MAPS_TO)),
+  maps_to: nullable(MAPS_TO),
   help: v.text(300, 0),
 }, ['key', 'label', 'type']);
 
@@ -32,7 +35,7 @@ function validateFields(fields) {
       throw badRequest(`“${f.label}” needs at least one option.`);
     }
     if (f.maps_to) {
-      if (mapped.has(f.maps_to)) throw badRequest(`Only one field can fill the lead’s ${f.maps_to.replace('_', ' ')}.`);
+      if (mapped.has(f.maps_to)) throw badRequest(`Only one field can fill the lead’s ${f.maps_to.replace('custom.', '').replace('_', ' ')}.`);
       mapped.add(f.maps_to);
     }
   }
@@ -121,10 +124,14 @@ export async function formRoutes(app) {
 
   async function assertLeadOptions(request, b) {
     if (!b.create_lead) return;
-    // Leads land in CRM, so the workspace needs CRM and the author needs to
-    // be allowed to create leads there.
-    if (!request.ctx.hasApp('crm')) throw badRequest('Turn on CRM to create leads from this form.');
-    request.ctx.assert('crm.leads.create');
+    // Leads land in the Leads app (or CRM: the same records), so the author
+    // needs one of them and the right to create leads there.
+    const canLeads = request.ctx.hasApp('leads') && request.ctx.can('leads.leads.create');
+    const canCrm = request.ctx.hasApp('crm') && request.ctx.can('crm.leads.create');
+    if (!canLeads && !canCrm) {
+      if (!request.ctx.hasApp('leads') && !request.ctx.hasApp('crm')) throw badRequest('Turn on the Leads or CRM app to create leads from this form.');
+      request.ctx.assert(request.ctx.hasApp('leads') ? 'leads.leads.create' : 'crm.leads.create');
+    }
     if (b.lead_owner_id) {
       const response = await fetch(`${config.tenancyUrl}/internal/authz/${request.ctx.orgId}/${b.lead_owner_id}`, {
         headers: { 'x-nexus-service-token': config.serviceToken }, signal: AbortSignal.timeout(8000),
@@ -237,7 +244,7 @@ export async function formRoutes(app) {
     const lines = [header.map(cell).join(','), ...rows.map((r) => [r.submitted_at.toISOString(), ...f.fields.map((x) => r.answers[x.key]), r.lead_id].map(cell).join(','))];
     reply.header('content-type', 'text/csv; charset=utf-8');
     reply.header('content-disposition', `attachment; filename="${f.name.replace(/[^\w-]+/g, '-').slice(0, 60) || 'responses'}.csv"`);
-    return `﻿${lines.join('\n')}`;
+    return `\uFEFF${lines.join('\n')}`;
   });
 
   app.delete(
@@ -293,18 +300,27 @@ export async function formRoutes(app) {
       const message = await db.transaction(async (tx) => {
         let leadId = null;
         if (f.create_lead && (contact.name || contact.email || contact.phone)) {
-          const existing = contact.email
-            ? await tx.one(`SELECT id FROM leads WHERE org_id = $1 AND lower(email) = lower($2) AND status <> 'converted' AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1`, [f.org_id, contact.email])
+          // The same person (by email, or by phone number) enquiring again.
+          const existing = contact.email || contact.phone
+            ? await tx.one(
+              `SELECT id FROM leads WHERE org_id = $1 AND status <> 'converted' AND archived_at IS NULL
+                  AND (lower(email) = lower($2) OR phone_key = $3) ORDER BY created_at DESC LIMIT 1`,
+              [f.org_id, contact.email, phoneKey(contact.phone)],
+            )
             : null;
-          const summary = f.fields.filter((x) => answers[x.key] !== undefined && x.maps_to !== 'notes')
+          // Answers that fill one of the workspace's lead fields go there.
+          const leadFields = await activeFields(tx, f.org_id);
+          const customInput = Object.fromEntries(Object.entries(by).filter(([k]) => k.startsWith('custom.')).map(([k, value]) => [k.slice(7), value]));
+          const { values: custom } = cleanCustom(leadFields, customInput, { strict: false });
+          const summary = f.fields.filter((x) => answers[x.key] !== undefined && x.maps_to !== 'notes' && !x.maps_to?.startsWith('custom.'))
             .map((x) => `${x.label}: ${Array.isArray(answers[x.key]) ? answers[x.key].join(', ') : answers[x.key]}`).join('\n');
           const notes = [`From the form “${f.name}”.`, by.notes, summary].filter(Boolean).join('\n\n');
           if (existing) {
             // The same person asking again: one lead, with the new enquiry on it.
             leadId = existing.id;
             await tx.query(
-              `UPDATE leads SET notes = concat_ws(E'\\n\\n', notes, $3::text), updated_at = now() WHERE org_id = $1 AND id = $2`,
-              [f.org_id, leadId, notes],
+              `UPDATE leads SET notes = concat_ws(E'\\n\\n', notes, $3::text), custom = custom || $4::jsonb, updated_at = now() WHERE org_id = $1 AND id = $2`,
+              [f.org_id, leadId, notes, JSON.stringify(custom)],
             );
           } else {
             const [first, ...rest] = (by.first_name ? [by.first_name] : (fullName || contact.email?.split('@')[0] || contact.phone || 'Web').split(/\s+/));
@@ -315,10 +331,12 @@ export async function formRoutes(app) {
                 first_name: String(first).slice(0, 80),
                 last_name: by.last_name ?? (rest.join(' ') || null),
                 email: contact.email, phone: contact.phone,
-                company_name: by.company_name ?? null, job_title: by.job_title ?? null,
+                company_name: by.company_name ?? null, job_title: by.job_title ?? null, city: by.city ?? null,
                 source: f.lead_source, owner_user_id: f.lead_owner_id ?? f.created_by,
-                tags: [f.name.slice(0, 40)], notes,
+                tags: [f.name.slice(0, 40)], notes, custom, source_detail: `Form · ${f.name}`.slice(0, 160),
               },
+              // The form's own notification already tells them.
+              notifyOwner: false,
             });
             leadId = lead.id;
           }
