@@ -256,6 +256,12 @@ export async function employeeRoutes(app) {
         if (loops) throw badRequest('That would create a circular reporting line.');
       }
 
+      // Someone who left comes back through Re-hire, which also clears their exit.
+      if (request.body.status !== undefined) {
+        const current = await db.one(`SELECT status FROM employees WHERE id = $1 AND org_id = $2`, [request.params.employeeId, orgId]);
+        if (current?.status === 'exited') throw badRequest('This person was offboarded. Use Re-hire to bring them back.');
+      }
+
       const fields = [
         'first_name', 'last_name', 'email', 'personal_email', 'phone', 'date_of_birth',
         'gender', 'department_id', 'designation', 'manager_id', 'employment_type',
@@ -363,6 +369,75 @@ export async function employeeRoutes(app) {
           leave_requests_cancelled: result.cancelled,
         },
       };
+    },
+  );
+
+  // ════════════════════════════════════════════════════════════════ RE-HIRE
+  /**
+   * Bring back someone who was offboarded: active again from their new
+   * joining date, exit cleared, same employee code and history (a note
+   * records when they left and why). Attendance, leave, payroll and the
+   * portal pick them up again because they key off the status.
+   */
+  app.post(
+    '/hr/employees/:employeeId/rehire',
+    {
+      preHandler: [app.loadContext, requirePermission('hr.employees.edit')],
+      schema: {
+        params: params({ employeeId: v.id('emp') }),
+        body: body({
+          joined_on: v.date,
+          status: v.enum(['active', 'on_probation']),
+          designation: v.text(120),
+          department_id: v.id('dep'),
+          manager_id: v.id('emp'),
+          employment_type: v.enum(['full_time', 'part_time', 'contract', 'intern', 'consultant']),
+        }),
+      },
+    },
+    async (request) => {
+      const { orgId, userId } = request.ctx;
+      const b = request.body ?? {};
+      const employee = await db.one(
+        `SELECT * FROM employees WHERE id = $1 AND org_id = $2 AND archived_at IS NULL`,
+        [request.params.employeeId, orgId],
+      );
+      if (!employee) throw notFound('Employee');
+      if (employee.status !== 'exited') throw badRequest('Only someone who has been offboarded can be re-hired.');
+      if (b.manager_id) {
+        if (b.manager_id === employee.id) throw badRequest('Someone cannot report to themselves.');
+        if (await managerLoops(db, orgId, employee.id, b.manager_id)) throw badRequest('That would create a circular reporting line.');
+      }
+      await ensureLeaveTypes(db, orgId);
+
+      const left = employee.exited_on ? new Date(employee.exited_on).toISOString().slice(0, 10) : 'an earlier date';
+      const row = await db.transaction(async (tx) => {
+        const updated = await tx.one(
+          `UPDATE employees
+              SET status = COALESCE($3, 'active'), joined_on = COALESCE($4::date, current_date),
+                  exited_on = NULL, exit_reason = NULL,
+                  designation = COALESCE($5, designation), department_id = COALESCE($6, department_id),
+                  manager_id = COALESCE($7, manager_id), employment_type = COALESCE($8, employment_type),
+                  notes = concat_ws(E'\n', notes, $9::text), updated_at = now()
+            WHERE id = $1 AND org_id = $2 RETURNING *`,
+          [employee.id, orgId, b.status ?? null, b.joined_on ?? null, b.designation ?? null, b.department_id ?? null,
+            b.manager_id ?? null, b.employment_type ?? null,
+            `Re-hired on ${b.joined_on ?? new Date().toISOString().slice(0, 10)}; previously left on ${left}${employee.exit_reason ? ` (${employee.exit_reason})` : ''}.`],
+        );
+        // This year's leave starts again from the policy, where it is missing.
+        await tx.query(
+          `INSERT INTO leave_balances (org_id, employee_id, leave_type_id, year, entitled)
+           SELECT $1, $2, lt.id, $3, lt.days_per_year FROM leave_types lt WHERE lt.org_id = $1 AND lt.archived_at IS NULL
+           ON CONFLICT DO NOTHING`,
+          [orgId, employee.id, new Date().getFullYear()],
+        );
+        await tx.query(
+          `INSERT INTO outbox (id, type, org_id, actor_id, data) VALUES ($1,$2,$3,$4,$5)`,
+          [id('evt'), EVENTS.EMPLOYEE_UPDATED, orgId, userId, JSON.stringify({ employee_id: employee.id, changed: ['status', 'joined_on'], rehired: true })],
+        );
+        return updated;
+      });
+      return { data: shape(row) };
     },
   );
 

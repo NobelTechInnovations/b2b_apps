@@ -228,7 +228,26 @@ function EmployeeDrawer({ employeeId, onClose, onChanged }) {
   const toast = useToast();
   const [employee, setEmployee] = useState(null);
   const [offboarding, setOffboarding] = useState(false);
+  const [rehiring, setRehiring] = useState(false);
+  const [rejoin, setRejoin] = useState({ joined_on: new Date().toISOString().slice(0, 10), status: 'active' });
   const [busy, setBusy] = useState(false);
+
+  async function rehire() {
+    setBusy(true);
+    try {
+      const response = await api.post(`/hr/employees/${employeeId}/rehire`, {
+        joined_on: rejoin.joined_on || undefined, status: rejoin.status, designation: rejoin.designation?.trim() || undefined,
+      });
+      setEmployee(response.data);
+      toast.success(`${response.data.name} is back`, { description: 'Active again for attendance, leave and payroll. Their earlier exit is kept in the notes.' });
+      setRehiring(false);
+      onChanged?.();
+    } catch (error) {
+      toast.error('Could not re-hire', { description: error instanceof ApiError ? error.message : undefined });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!employeeId) { setEmployee(null); return; }
@@ -268,11 +287,17 @@ function EmployeeDrawer({ employeeId, onClose, onChanged }) {
         subtitle={employee?.designation}
         badge={employee && <Badge size="sm" tone={STATUS_TONE[employee.status]}>{label(employee.status)}</Badge>}
         footer={
-          employee && employee.status !== 'exited' && (
+          employee && (
             <Can permission="hr.employees.edit">
-              <Button variant="danger-ghost" icon={LogOut} onClick={() => setOffboarding(true)}>
-                Offboard
-              </Button>
+              {employee.status === 'exited' ? (
+                <Button variant="primary" icon={UserPlus} onClick={() => { setRejoin({ joined_on: new Date().toISOString().slice(0, 10), status: 'active', designation: employee.designation ?? '' }); setRehiring(true); }}>
+                  Re-hire
+                </Button>
+              ) : (
+                <Button variant="danger-ghost" icon={LogOut} onClick={() => setOffboarding(true)}>
+                  Offboard
+                </Button>
+              )}
             </Can>
           )
         }
@@ -397,6 +422,36 @@ function EmployeeDrawer({ employeeId, onClose, onChanged }) {
           </div>
         )}
       </Drawer>
+
+      <Modal
+        open={rehiring}
+        onClose={() => setRehiring(false)}
+        title={`Re-hire ${employee?.name ?? ''}`}
+        description="They become active again with the same employee code. Their earlier exit date and reason are kept in their notes."
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRehiring(false)} disabled={busy}>Cancel</Button>
+            <Button variant="primary" icon={UserPlus} loading={busy} onClick={rehire}>Re-hire</Button>
+          </>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Joining date">
+            {(p) => <Input {...p} type="date" value={rejoin.joined_on} onChange={(e) => setRejoin((r) => ({ ...r, joined_on: e.target.value }))} />}
+          </Field>
+          <Field label="Status">
+            {(p) => (
+              <Select {...p} value={rejoin.status} onChange={(e) => setRejoin((r) => ({ ...r, status: e.target.value }))}>
+                <option value="active">Active</option>
+                <option value="on_probation">On probation</option>
+              </Select>
+            )}
+          </Field>
+          <Field label="Designation" className="sm:col-span-2">
+            {(p) => <Input {...p} value={rejoin.designation ?? ''} onChange={(e) => setRejoin((r) => ({ ...r, designation: e.target.value }))} />}
+          </Field>
+        </div>
+      </Modal>
 
       <Modal
         open={offboarding}
