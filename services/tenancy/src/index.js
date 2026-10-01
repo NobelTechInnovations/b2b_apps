@@ -7,6 +7,7 @@ import { config } from './config.js';
 import { createIdentityClient } from './lib/identity-client.js';
 import { organizationRoutes } from './routes/organizations.js';
 import { memberRoutes } from './routes/members.js';
+import { accessRoutes } from './routes/access.js';
 import { roleRoutes } from './routes/roles.js';
 import { invitationRoutes } from './routes/invitations.js';
 import { internalRoutes } from './routes/internal.js';
@@ -35,6 +36,7 @@ app.decorate(
 
 await app.register(organizationRoutes);
 await app.register(memberRoutes);
+await app.register(accessRoutes);
 await app.register(roleRoutes);
 await app.register(invitationRoutes);
 await app.register(internalRoutes);

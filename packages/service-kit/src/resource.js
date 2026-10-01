@@ -109,30 +109,78 @@ export function resource(app, spec) {
     return { data: shape(hooks.detail ? await hooks.detail(db, row, request) : row) };
   });
 
+  /** Create one record: the same path for the form and for each imported row. */
+  async function createOne(request, data) {
+    const { orgId, userId } = request.ctx;
+    for (const key of required) {
+      if (typeof data[key] === 'string' && !data[key]) throw badRequest(`${key.replace(/_/g, ' ')} is required.`);
+    }
+    try {
+      return await db.transaction(async (tx) => {
+        const prepared = hooks.beforeCreate ? await hooks.beforeCreate(tx, data, request) : data;
+        const record = encode({ id: newId(prefix), org_id: orgId, created_by: userId, ...prepared });
+        const keys = Object.keys(record);
+        const created = await tx.one(
+          `INSERT INTO ${T} (${keys.map(ident).join(', ')}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING id`,
+          keys.map((k) => record[k]),
+        );
+        const full = await load(tx, orgId, created.id);
+        if (hooks.afterCreate) await hooks.afterCreate(tx, full, request);
+        return full;
+      });
+    } catch (error) {
+      return translateUnique(error);
+    }
+  }
+
   if (!readOnly) {
     app.post(path, { preHandler: guard(perm.create), schema: { body: body(fields, required) } }, async (request, reply) => {
-      const { orgId, userId } = request.ctx;
-      const data = trimmed(request.body);
-      for (const key of required) {
-        if (typeof data[key] === 'string' && !data[key]) throw badRequest(`${key.replace(/_/g, ' ')} is required.`);
+      const row = await createOne(request, trimmed(request.body));
+      return reply.status(201).send({ data: shape(row) });
+    });
+
+    /**
+     * Many records at once, from a spreadsheet. Each row is checked against
+     * the same field rules and runs through the same hooks as the form, in its
+     * own transaction: a bad row is reported with its line number and the
+     * rest still go in.
+     */
+    app.post(`${path}/import`, {
+      preHandler: guard(perm.create),
+      schema: { body: { type: 'object', properties: { rows: { type: 'array', minItems: 1, maxItems: 1000, items: { type: 'object' } }, first_line: { type: 'integer', minimum: 1 } }, required: ['rows'], additionalProperties: false } },
+    }, async (request) => {
+      const validate = request.compileValidationSchema(body(fields, required));
+      const offset = request.body.first_line ?? 2;
+      const result = { created: 0, failed: 0, errors: [] };
+      const fail = (index, message) => {
+        result.failed += 1;
+        if (result.errors.length < 100) result.errors.push({ row: offset + index, message });
+      };
+      for (const [index, raw] of request.body.rows.entries()) {
+        // Blank cells mean "not given"; unknown columns are ignored.
+        const row = {};
+        for (const [key, value] of Object.entries(raw ?? {})) {
+          if (!(key in fields) || value === '' || value === null || value === undefined) continue;
+          row[key] = typeof value === 'string' ? value.trim() : value;
+        }
+        if (!validate(row)) {
+          const problem = validate.errors?.[0];
+          if (problem?.keyword === 'required') {
+            fail(index, `${String(problem.params.missingProperty).replace(/_/g, ' ')} is required`);
+          } else {
+            const field = (problem?.instancePath ?? '').replace(/^\//, '');
+            fail(index, `${field ? `${field.replace(/_/g, ' ')}: ` : ''}${problem?.message ?? 'not valid'}`);
+          }
+          continue;
+        }
+        try {
+          await createOne(request, row);
+          result.created += 1;
+        } catch (error) {
+          fail(index, error.expose ? error.message : 'Could not be saved.');
+        }
       }
-      try {
-        const row = await db.transaction(async (tx) => {
-          const prepared = hooks.beforeCreate ? await hooks.beforeCreate(tx, data, request) : data;
-          const record = encode({ id: newId(prefix), org_id: orgId, created_by: userId, ...prepared });
-          const keys = Object.keys(record);
-          const created = await tx.one(
-            `INSERT INTO ${T} (${keys.map(ident).join(', ')}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING id`,
-            keys.map((k) => record[k]),
-          );
-          const full = await load(tx, orgId, created.id);
-          if (hooks.afterCreate) await hooks.afterCreate(tx, full, request);
-          return full;
-        });
-        return reply.status(201).send({ data: shape(row) });
-      } catch (error) {
-        return translateUnique(error);
-      }
+      return { data: result };
     });
 
     app.patch(`${path}/:id`, { preHandler: guard(perm.edit), schema: { ...idParams, body: body(fields) } }, async (request) => {

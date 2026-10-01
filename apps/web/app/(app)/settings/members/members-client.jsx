@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { UserPlus, MoreHorizontal, Search, Mail, Copy, Trash2, ShieldCheck, Clock, LayoutGrid } from 'lucide-react';
-import { appBySlug } from '@nexus/contracts';
+import { useEffect, useState } from 'react';
+import { UserPlus, MoreHorizontal, Search, Mail, Copy, Trash2, ShieldCheck, Clock, LayoutGrid, KeyRound, Check, X } from 'lucide-react';
+import { appBySlug, permissionLabel } from '@nexus/contracts';
 import { api, ApiError } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import { useWorkspace, Can } from '@/lib/workspace';
@@ -31,6 +31,7 @@ export default function MembersClient({ initialMembers, initialInvitations, role
   const [busy, setBusy] = useState(false);
   const [appsFor, setAppsFor] = useState(null);
   const [rolesFor, setRolesFor] = useState(null);
+  const [extrasFor, setExtrasFor] = useState(null);
 
   // The apps this workspace has switched on — the ones there is anything to share.
   const workspaceApps = (workspace?.workspace_apps ?? [])
@@ -90,6 +91,10 @@ export default function MembersClient({ initialMembers, initialInvitations, role
           </Can>
         }
       />
+
+      <Can permission="core.roles.manage">
+        <AccessRequests onDecided={() => api.get('/members', { query: { limit: 100 } }).then((r) => setMembers(r.data)).catch(() => {})} />
+      </Can>
 
       <div className="mb-4 flex items-center gap-3">
         <Input
@@ -181,6 +186,7 @@ export default function MembersClient({ initialMembers, initialInvitations, role
                           <Can permission="core.roles.manage">
                             <MenuItem icon={LayoutGrid} onClick={() => setAppsFor(member)}>App access</MenuItem>
                             <MenuItem icon={ShieldCheck} onClick={() => setRolesFor(member)}>Change role</MenuItem>
+                            <MenuItem icon={KeyRound} onClick={() => setExtrasFor(member)}>Extra abilities</MenuItem>
                           </Can>
                           <MenuDivider />
                           <MenuItem icon={Trash2} danger onClick={() => setRemoving(member)}>
@@ -231,6 +237,8 @@ export default function MembersClient({ initialMembers, initialInvitations, role
         onClose={() => setAppsFor(null)}
         onSaved={(member) => { replace(member); setAppsFor(null); }}
       />
+
+      <ExtrasModal member={extrasFor} apps={workspaceApps} onClose={() => setExtrasFor(null)} />
 
       <RolesModal
         member={rolesFor}
@@ -559,6 +567,143 @@ function RolesModal({ member, roles, onClose, onSaved }) {
             </span>
           </label>
         ))}
+      </div>
+    </Modal>
+  );
+}
+
+/* ── asking for access ────────────────────────────────────────────────────── */
+function AccessRequests({ onDecided }) {
+  const toast = useToast();
+  const [requests, setRequests] = useState([]);
+  const [busy, setBusy] = useState(null);
+  const load = () => api.get('/members/access-requests').then((r) => setRequests(r.data)).catch(() => setRequests([]));
+  useEffect(() => { load(); }, []);
+
+  async function decide(request, decision) {
+    setBusy(request.id);
+    try {
+      await api.post(`/members/access-requests/${request.id}/decide`, { decision });
+      toast.success(decision === 'approve' ? 'Approved' : 'Declined', { description: decision === 'approve' ? `${request.person?.name ?? 'They'} can use it now.` : undefined });
+      load();
+      onDecided?.();
+    } catch (err) {
+      toast.error('Could not decide', { description: err instanceof ApiError ? err.message : undefined });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!requests.length) return null;
+  return (
+    <Card className="mb-5 divide-y divide-[var(--border-subtle)]">
+      <p className="px-4 py-2.5 text-sm font-medium">Access requests</p>
+      {requests.map((r) => (
+        <div key={r.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+          <Avatar name={r.person?.name ?? r.person?.email ?? '?'} size="md" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm">
+              <strong>{r.person?.name ?? r.person?.email ?? 'Someone'}</strong> asked for{' '}
+              {r.permission_label ? <>“{r.permission_label}”{r.app_name ? ` in ${r.app_name}` : ''}</> : r.app_name ? `access to ${r.app_name}` : 'access'}
+            </p>
+            {r.note && <p className="text-xs text-[var(--text-secondary)]">“{r.note}”</p>}
+            <p className="text-xs text-[var(--text-tertiary)]">{relativeTime(r.created_at)}</p>
+          </div>
+          <Button size="sm" variant="ghost" icon={X} disabled={busy === r.id} onClick={() => decide(r, 'decline')}>Decline</Button>
+          <Button size="sm" variant="primary" icon={Check} loading={busy === r.id} onClick={() => decide(r, 'approve')}>Approve</Button>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+/* ── one person's extra abilities ─────────────────────────────────────────── */
+function ExtrasModal({ member, apps, onClose }) {
+  const toast = useToast();
+  const { can } = useWorkspace();
+  const [data, setData] = useState(null);
+  const [checked, setChecked] = useState(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    if (!member) return;
+    api.get(`/members/${member.id}/permissions`).then((r) => {
+      setData(r.data);
+      setChecked(new Set(r.data.effective));
+    }).catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load their abilities.'));
+  }, [member]);
+
+  if (!member) return null;
+  const admin = unlimited(member.roles);
+  const opens = (slug) => !data?.app_access || data.app_access.includes(slug);
+  // What their role gives, without this person's own extras.
+  const extrasAllowed = new Set((data?.extra ?? []).filter((x) => x.effect === 'allow').map((x) => x.permission));
+  const extrasDenied = new Set((data?.extra ?? []).filter((x) => x.effect === 'deny').map((x) => x.permission));
+  const fromRole = new Set([...(data?.effective ?? []).filter((p) => !extrasAllowed.has(p)), ...extrasDenied]);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const shown = apps.filter((a) => opens(a.slug)).flatMap((a) => a.permissions);
+      const allow = shown.filter((p) => checked.has(p) && !fromRole.has(p));
+      const deny = shown.filter((p) => !checked.has(p) && fromRole.has(p));
+      await api.put(`/members/${member.id}/permissions`, { allow, deny });
+      toast.success('Abilities saved', { description: 'They apply on their next click.' });
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not save.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const toggle = (permission) => setChecked((current) => {
+    const next = new Set(current);
+    if (next.has(permission)) next.delete(permission); else next.add(permission);
+    return next;
+  });
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="lg"
+      title={`What ${member.name ?? member.email} can do`}
+      description="Their role sets the usual abilities. Tick or untick here to give or take away one thing for this person only."
+      footer={<><Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button><Button variant="primary" loading={busy} disabled={admin || !data} onClick={save}>Save</Button></>}
+    >
+      <div className="space-y-4">
+        {error && <Alert tone="critical">{error}</Alert>}
+        {admin ? (
+          <Alert tone="info">Owners and administrators can already do everything.</Alert>
+        ) : !data ? (
+          <p className="text-sm text-[var(--text-tertiary)]">Loading…</p>
+        ) : (
+          <div className="max-h-[28rem] space-y-4 overflow-y-auto pr-1">
+            {apps.filter((a) => opens(a.slug)).map((a) => (
+              <div key={a.slug}>
+                <p className="mb-1.5 text-sm font-medium">{a.name}</p>
+                <div className="grid gap-1 sm:grid-cols-2">
+                  {a.permissions.map((p) => (
+                    <label key={p} className={`flex items-center gap-2 rounded-[var(--radius-md)] px-2 py-1 text-sm ${can(p) ? 'cursor-pointer hover:bg-[var(--surface-hover)]' : 'opacity-50'}`} title={can(p) ? undefined : 'You cannot give what you do not have'}>
+                      <input type="checkbox" className="size-4" checked={checked.has(p)} disabled={!can(p)} onChange={() => toggle(p)} />
+                      <span>{permissionLabel(p)}</span>
+                      {extrasAllowed.has(p) && <Badge size="sm" tone="brand">extra</Badge>}
+                      {extrasDenied.has(p) && <Badge size="sm" tone="caution">removed</Badge>}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {apps.some((a) => !opens(a.slug)) && (
+              <p className="text-xs text-[var(--text-tertiary)]">Apps they cannot open are not listed. Share an app with them first (App access).</p>
+            )}
+          </div>
+        )}
       </div>
     </Modal>
   );

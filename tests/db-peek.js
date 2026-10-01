@@ -13,7 +13,9 @@ export async function peek(sql, values = []) {
   const client = new pg.Client({ connectionString: env.DATABASE_URL });
   await client.connect();
   try {
-    return await client.query(sql, values);
+    // Tests name `nexus_<service>` schemas; follow a local DB_SCHEMA_PREFIX.
+    const prefix = env.DB_SCHEMA_PREFIX;
+    return await client.query(prefix ? sql.replaceAll('nexus_', prefix) : sql, values);
   } finally {
     await client.end();
   }

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   Plus, FolderKanban, ListChecks, CalendarDays, Timer, Kanban, ArrowLeft, ArrowRight, Paperclip,
   CheckCircle2, Circle, Search, SlidersHorizontal, GripVertical, ArrowUpRight, Flag, Lock, Globe2,
-  Users, Table2, Settings2, UserPlus, Trash2, AlertCircle,
+  Users, Table2, Settings2, UserPlus, Trash2, AlertCircle, MoreHorizontal,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { API_BASE } from '@/lib/api-base';
@@ -14,6 +14,8 @@ import { useWorkspace } from '@/lib/workspace';
 import { Button } from '@/components/ui/button';
 import { Input, Select, Textarea } from '@/components/ui/input';
 import { Drawer } from '@/components/data/drawer';
+import { Menu, MenuItem } from '@/components/ui/menu';
+import { Modal } from '@/components/ui/modal';
 import { Alert } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
 import styles from './tasks.module.css';
@@ -57,6 +59,8 @@ export default function TasksClient({ view = 'work' }) {
   const [sharing, setSharing] = useState(null);
   const [invitee, setInvitee] = useState({ user_id: '', role: 'editor' });
   const [quickAdd, setQuickAdd] = useState({});
+  const [columns, setColumns] = useState([]);
+  const [columnDraft, setColumnDraft] = useState(null); // { id?, name, status, move_to? }
   const active = workspace?.installed?.includes('tasks') && workspace?.apps?.includes('tasks');
   const required = view === 'projects' ? 'tasks.projects.view' : view === 'time' ? 'tasks.time.view' : 'tasks.tasks.view';
   const currentBoard = projects.find(p => p.id === projectId) ?? null;
@@ -124,6 +128,12 @@ export default function TasksClient({ view = 'work' }) {
       setProjectId((projects.find(p => p.status === 'active') ?? projects[0]).id);
     }
   }, [view, projectId, projects]);
+  // A board's own Kanban columns ("Pending", "Review"); other views use the four states.
+  const loadColumns = useCallback(() => {
+    if (view !== 'board' || !projectId) { setColumns([]); return; }
+    api.get(`/tasks/projects/${projectId}/columns`).then(r => setColumns(r.data ?? [])).catch(() => setColumns([]));
+  }, [view, projectId]);
+  useEffect(() => { loadColumns(); }, [loadColumns]);
   useEffect(() => {
     setMilestones([]);
     if (draft?.project_id && can('tasks.projects.view')) api.get(`/tasks/projects/${draft.project_id}/milestones`).then(r => setMilestones(r.data)).catch(e => setError(e.message));
@@ -154,6 +164,8 @@ export default function TasksClient({ view = 'work' }) {
       const data = {};
       for (const key of ['title', 'description', 'status', 'priority']) data[key] = draft[key];
       for (const key of ['project_id', 'milestone_id', 'assignee_id', 'due_date']) data[key] = draft[key] || null;
+      // Its column on the board; the server keeps it unless the status was changed here.
+      if (draft.column_id && data.project_id) data.column_id = draft.column_id;
       if (!draft.id && draft.source_app) for (const key of ['source_app', 'source_type', 'source_id']) data[key] = draft[key];
       if (draft.id) await api.patch(`/tasks/${draft.id}`, data); else await api.post('/tasks', data);
       setDraft(null); setDetail(null);
@@ -190,10 +202,30 @@ export default function TasksClient({ view = 'work' }) {
     'helpdesk.ticket': `/helpdesk/tickets?ticket=${detail?.source_id}`, 'recruitment.candidate': `/recruitment?candidate=${detail?.source_id}`,
   })[`${detail?.source_app}.${detail?.source_type}`] ?? '/tasks';
   const move = (taskId, status) => perform(() => api.patch(`/tasks/${taskId}`, { status }), `Moved to ${STATUSES[status]}`);
+  const lanes = view === 'board' && projectId && columns.length
+    ? columns.map(c => ({ key: c.id, label: c.name, status: c.status, column: c }))
+    : Object.entries(STATUSES).map(([status, label]) => ({ key: status, label, status, column: null }));
+  // A task with no column sits in the first column for its state.
+  const laneOf = (task) => lanes.find(l => l.column && l.key === task.column_id) ?? lanes.find(l => l.status === task.status) ?? lanes[0];
+  const moveTo = (taskId, lane) => (lane.column ? perform(() => api.patch(`/tasks/${taskId}`, { column_id: lane.key }), `Moved to ${lane.label}`) : move(taskId, lane.status));
+  const saveColumn = () => perform(async () => {
+    const { id, name, status, move_to: moveTo } = columnDraft;
+    if (columnDraft.deleting) await api.del(`/tasks/projects/${projectId}/columns/${id}`, { body: { move_to: moveTo } });
+    else if (id) await api.patch(`/tasks/projects/${projectId}/columns/${id}`, { name: name.trim(), status });
+    else await api.post(`/tasks/projects/${projectId}/columns`, { name: name.trim(), status });
+    setColumnDraft(null);
+    loadColumns();
+  }, columnDraft?.deleting ? 'Column removed' : columnDraft?.id ? 'Column saved' : 'Column added');
+  const shiftColumn = (index, delta) => perform(async () => {
+    const ids = columns.map(c => c.id);
+    const [moved] = ids.splice(index, 1);
+    ids.splice(index + delta, 0, moved);
+    setColumns((await api.put(`/tasks/projects/${projectId}/columns`, { ids })).data);
+  }, 'Columns reordered');
   const patchTask = (taskId, data) => perform(() => api.patch(`/tasks/${taskId}`, data));
   const stats = meta.stats ?? {};
   const editableBoards = projects.filter(p => p.can_edit && (p.status === 'active'));
-  const newTask = (status = 'todo') => { setDetail(null); setError(''); setDraft({ ...blankTask(), status, project_id: currentBoard?.can_edit ? projectId : '', assignee_id: user.id }); };
+  const newTask = (status = 'todo', columnId = null) => { setDetail(null); setError(''); setDraft({ ...blankTask(), status, column_id: columnId, project_id: currentBoard?.can_edit ? projectId : '', assignee_id: user.id }); };
   const canEditTasks = (task) => can('tasks.tasks.edit') && (!task.project_id || projects.find(p => p.id === task.project_id)?.can_edit !== false);
 
   // Who can be handed a task: on a private board, only its members (admins
@@ -218,7 +250,9 @@ export default function TasksClient({ view = 'work' }) {
     <div className={styles.cardTags}><span className={styles.priority} data-priority={task.priority}><Flag size={10} />{task.priority}</span>{task.parent_id && <span className={styles.subtaskTag}>Subtask</span>}</div>
     <div className={styles.cardFooter}><span className={styles.due} data-overdue={Boolean(task.due_date && task.due_date < today() && task.status !== 'done')}><CalendarDays size={13} />{task.due_date ? new Date(`${task.due_date}T12:00:00`).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) : 'No due date'}</span><span className={styles.avatar} title={personName(task.assignee_id)}>{task.assignee_id ? initials(avatarName(task.assignee_id)) : '–'}</span></div>
     {can('tasks.time.log') && <button className="mt-3 flex items-center gap-2 text-sm" onClick={() => logTime(task)}><Timer size={14} />Log time</button>}
-    {canEditTasks(task) && <select aria-label={`Status for ${task.title}`} className={styles.statusSelect} value={task.status} disabled={busy} onChange={e => move(task.id, e.target.value)}>{Object.entries(STATUSES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>}
+    {canEditTasks(task) && (lanes[0]?.column
+      ? <select aria-label={`Column for ${task.title}`} className={styles.statusSelect} value={laneOf(task).key} disabled={busy} onChange={e => moveTo(task.id, lanes.find(l => l.key === e.target.value))}>{lanes.map(l => <option key={l.key} value={l.key}>{l.label}</option>)}</select>
+      : <select aria-label={`Status for ${task.title}`} className={styles.statusSelect} value={task.status} disabled={busy} onChange={e => move(task.id, e.target.value)}>{Object.entries(STATUSES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>)}
   </article>;
 
   if (!active) return <div className={panel}><h1 className="text-xl font-semibold">Tasks & Boards</h1><p className="my-3">Add and install this app to start managing your team’s work.</p><Link href="/apps"><Button>Open marketplace</Button></Link></div>;
@@ -264,19 +298,21 @@ export default function TasksClient({ view = 'work' }) {
         <div className={styles.projectActions}>{p.can_manage ? <button onClick={() => openSharing(p)} className="flex items-center gap-1.5"><UserPlus size={13} />Share</button> : <button onClick={() => openSharing(p)} className="flex items-center gap-1.5"><Users size={13} />Members</button>}<Link href={`/tasks/board?project=${p.id}`}>Open board <ArrowUpRight size={15} /></Link></div>
       </article>)}{!projects.length && <div className={styles.emptyState}><FolderKanban size={32} /><h2>{can('tasks.projects.create') ? 'Create your first board.' : 'No boards shared with you yet.'}</h2><p>{can('tasks.projects.create') ? 'A board per team, client or person — private to the people you add.' : 'When someone adds you to a board, it appears here. Personal to-dos live in My work.'}</p>{can('tasks.projects.create') && <Button icon={Plus} onClick={() => setProjectDraft(blankBoard())}>New board</Button>}</div>}</div>}
 
-      {view === 'board' && layout === 'kanban' && <div className={styles.board}>{Object.entries(STATUSES).map(([status, label]) => <section key={status} className={styles.column} data-drop-target={dropTarget === status} onDragOver={e => { e.preventDefault(); if (dragging) setDropTarget(status); }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDropTarget(null); }} onDrop={e => { e.preventDefault(); const taskId = e.dataTransfer.getData('text/plain'); setDragging(null); setDropTarget(null); const dropped = tasks.find(t => t.id === taskId); if (!busy && dropped && canEditTasks(dropped) && dropped.status !== status) move(taskId, status); }}><div className={styles.columnHeading}><h2><span className={styles.statusDot} data-status={status} />{label}<span className={styles.columnCount}>{tasks.filter(t => t.status === status).length}</span></h2>{can('tasks.tasks.create') && (!currentBoard || currentBoard.can_edit) && <button aria-label={`Add task to ${label}`} onClick={() => newTask(status)}><Plus size={16} /></button>}</div><div className={styles.columnTasks}>{tasks.filter(t => t.status === status).map(taskCard)}{!tasks.some(t => t.status === status) && <div className={styles.emptyColumn}><Circle size={18} /><span>No tasks here yet</span><small>{status === 'done' ? 'Finished work finds its home here.' : 'Drop a task here to move it.'}</small></div>}</div></section>)}</div>}
+      {view === 'board' && layout === 'kanban' && <div className={styles.board}>{lanes.map((lane, laneIndex) => { const laneTasks = tasks.filter(t => laneOf(t).key === lane.key); return <section key={lane.key} className={styles.column} data-drop-target={dropTarget === lane.key} onDragOver={e => { e.preventDefault(); if (dragging) setDropTarget(lane.key); }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDropTarget(null); }} onDrop={e => { e.preventDefault(); const taskId = e.dataTransfer.getData('text/plain'); setDragging(null); setDropTarget(null); const dropped = tasks.find(t => t.id === taskId); if (!busy && dropped && canEditTasks(dropped) && laneOf(dropped).key !== lane.key) moveTo(taskId, lane); }}><div className={styles.columnHeading}><h2><span className={styles.statusDot} data-status={lane.status} />{lane.label}<span className={styles.columnCount}>{laneTasks.length}</span></h2><div className="flex items-center gap-0.5">{lane.column && currentBoard?.can_edit && <Menu align="end" width={190} trigger={<button aria-label={`Options for ${lane.label}`}><MoreHorizontal size={16} /></button>}><MenuItem onClick={() => setColumnDraft({ id: lane.key, name: lane.label, status: lane.status })}>Rename or change</MenuItem>{laneIndex > 0 && <MenuItem onClick={() => shiftColumn(laneIndex, -1)}>Move left</MenuItem>}{laneIndex < lanes.length - 1 && <MenuItem onClick={() => shiftColumn(laneIndex, 1)}>Move right</MenuItem>}{currentBoard?.can_manage && lanes.length > 1 && <MenuItem danger onClick={() => setColumnDraft({ id: lane.key, name: lane.label, status: lane.status, deleting: true, move_to: lanes.find(l => l.key !== lane.key).key })}>Delete column</MenuItem>}</Menu>}{can('tasks.tasks.create') && (!currentBoard || currentBoard.can_edit) && <button aria-label={`Add task to ${lane.label}`} onClick={() => newTask(lane.status, lane.column?.id ?? null)}><Plus size={16} /></button>}</div></div><div className={styles.columnTasks}>{laneTasks.map(taskCard)}{!laneTasks.length && <div className={styles.emptyColumn}><Circle size={18} /><span>No tasks here yet</span><small>{lane.status === 'done' ? 'Finished work finds its home here.' : 'Drop a task here to move it.'}</small></div>}</div></section>; })}{lanes[0]?.column && currentBoard?.can_edit && currentBoard.status === 'active' && <section className={styles.column}><button className="flex w-full items-center justify-center gap-2 rounded-[var(--radius-lg)] border-2 border-dashed border-[var(--border-default)] py-6 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]" onClick={() => setColumnDraft({ name: '', status: 'todo' })}><Plus size={16} />Add column</button></section>}</div>}
 
-      {view === 'board' && layout === 'table' && <div className={styles.groupScroll}>{Object.entries(STATUSES).map(([status, label]) => { const rows = tasks.filter(t => t.status === status); return <section key={status} className={styles.group} style={{ '--group': GROUP_COLORS[status] }}>
+      {view === 'board' && layout === 'table' && <div className={styles.groupScroll}>{lanes.map((lane) => { const status = lane.status, label = lane.label, laneKey = lane.key; const rows = tasks.filter(t => laneOf(t).key === laneKey); return <section key={laneKey} className={styles.group} style={{ '--group': GROUP_COLORS[status] }}>
         <div className={styles.groupTitle}>{label}<small>{rows.length} item{rows.length === 1 ? '' : 's'}</small></div>
         <div className={styles.tableHead}><span>Task</span><span>Owner</span><span>Status</span><span>Priority</span><span>Due</span></div>
         {rows.map(task => <div key={task.id} className={styles.tableRow}>
           <button onClick={() => openTask(task.id)}>{task.status === 'done' ? <CheckCircle2 size={15} className="shrink-0 text-[#00c875]" /> : <Circle size={15} className="shrink-0 text-[var(--text-tertiary)]" />}<span className="truncate">{task.title}</span>{!currentBoard && task.project_name && <span className={`${styles.boardSwatch} ml-auto flex shrink-0 items-center gap-1 text-2xs font-normal text-[var(--text-tertiary)]`} data-color={task.project_color}><span className={styles.boardDot} />{task.project_name}</span>}</button>
           <span className="gap-2 text-xs"><span className={styles.avatar}>{task.assignee_id ? initials(avatarName(task.assignee_id)) : '–'}</span><span className="truncate">{task.assignee_id ? personName(task.assignee_id) : 'Unassigned'}</span></span>
-          <span className={styles.pill} data-status={task.status}>{canEditTasks(task) ? <select aria-label={`Status for ${task.title}`} value={task.status} disabled={busy} onChange={e => move(task.id, e.target.value)}>{Object.entries(STATUSES).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select> : STATUSES[task.status]}</span>
+          <span className={styles.pill} data-status={task.status}>{canEditTasks(task) ? (lane.column
+            ? <select aria-label={`Column for ${task.title}`} value={laneKey} disabled={busy} onChange={e => moveTo(task.id, lanes.find(l => l.key === e.target.value))}>{lanes.map(l => <option key={l.key} value={l.key}>{l.label}</option>)}</select>
+            : <select aria-label={`Status for ${task.title}`} value={task.status} disabled={busy} onChange={e => move(task.id, e.target.value)}>{Object.entries(STATUSES).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select>) : (lane.column ? lane.label : STATUSES[task.status])}</span>
           <span className={styles.pill} data-priority={task.priority}>{canEditTasks(task) ? <select aria-label={`Priority for ${task.title}`} value={task.priority} disabled={busy} onChange={e => patchTask(task.id, { priority: e.target.value })}>{PRIORITIES.map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}</select> : task.priority}</span>
           <span className={styles.due} data-overdue={Boolean(task.due_date && task.due_date < today() && task.status !== 'done')}>{canEditTasks(task) ? <input type="date" aria-label={`Due date for ${task.title}`} className="w-full bg-transparent text-xs outline-none" value={task.due_date ?? ''} disabled={busy} onChange={e => patchTask(task.id, { due_date: e.target.value || null })} /> : (task.due_date ?? '—')}</span>
         </div>)}
-        {can('tasks.tasks.create') && currentBoard?.can_edit && currentBoard.status === 'active' && <form className={styles.addRow} onSubmit={e => { e.preventDefault(); const title = (quickAdd[status] ?? '').trim(); if (!title) return; perform(async () => { await api.post('/tasks', { title, status, project_id: currentBoard.id }); setQuickAdd(q => ({ ...q, [status]: '' })); }, 'Task added'); }}><Plus size={14} className="mt-1 text-[var(--text-tertiary)]" /><input aria-label={`Add a task to ${label}`} placeholder="+ Add task" value={quickAdd[status] ?? ''} onChange={e => setQuickAdd(q => ({ ...q, [status]: e.target.value }))} /></form>}
+        {can('tasks.tasks.create') && currentBoard?.can_edit && currentBoard.status === 'active' && <form className={styles.addRow} onSubmit={e => { e.preventDefault(); const title = (quickAdd[laneKey] ?? '').trim(); if (!title) return; perform(async () => { await api.post('/tasks', { title, status, project_id: currentBoard.id, ...(lane.column ? { column_id: laneKey } : {}) }); setQuickAdd(q => ({ ...q, [laneKey]: '' })); }, 'Task added'); }}><Plus size={14} className="mt-1 text-[var(--text-tertiary)]" /><input aria-label={`Add a task to ${label}`} placeholder="+ Add task" value={quickAdd[laneKey] ?? ''} onChange={e => setQuickAdd(q => ({ ...q, [laneKey]: e.target.value }))} /></form>}
       </section>; })}</div>}
 
       {view === 'work' && (tasks.length ? <div className={styles.list}><div className={styles.listHeader}><span>Task</span><span>Status</span><span>Priority</span><span>Due date</span><span>Owner / time</span></div>{tasks.map(task => <div key={task.id} className={styles.listRow}><button onClick={() => openTask(task.id)} className={styles.listTitle}>{task.status === 'done' ? <CheckCircle2 size={18} /> : <Circle size={18} />}<span><strong>{task.title}</strong><small>{task.project_name || 'Personal to-do'}</small></span></button><span className={styles.listStatus}><span className={styles.statusDot} data-status={task.status} />{STATUSES[task.status]}</span><span><span className={styles.priority} data-priority={task.priority}>{task.priority}</span></span><span className={styles.due} data-overdue={Boolean(task.due_date && task.due_date < today() && task.status !== 'done')}>{task.due_date || '—'}</span><div><span className={styles.avatar} title={personName(task.assignee_id)}>{task.assignee_id ? initials(avatarName(task.assignee_id)) : '–'}</span>{can('tasks.time.log') && <button className="mt-2 text-xs underline" onClick={() => logTime(task)}>Log time</button>}</div></div>)}</div> : <div className={styles.emptyState}><ListChecks size={34} /><h2>A little breathing room.</h2><p>No tasks match this view. Adjust the filters or create something new.</p>{can('tasks.tasks.create') && <Button onClick={() => newTask()} icon={Plus}>Create a task</Button>}</div>)}
@@ -308,7 +344,7 @@ export default function TasksClient({ view = 'work' }) {
 
     <Drawer className={styles.drawer} open={Boolean(detail) && !draft && !timeTask} onClose={() => { if (!busy) setDetail(null); }} title={detail?.title} subtitle={detail ? `${STATUSES[detail.status]} · ${detail.priority} priority` : ''}>
       {detail && <div className="space-y-6">{error && <Alert tone="critical">{error}</Alert>}
-        <div className="flex flex-wrap gap-2">{canEditTasks(detail) && <Button onClick={() => { setDraft(detail); setDetail(null); }}>Edit task</Button>}{can('tasks.tasks.delete') && canEditTasks(detail) && <Button variant="danger-ghost" disabled={busy} onClick={() => perform(async () => { await api.del(`/tasks/${detail.id}`); setDetail(null); }, 'Task archived')}>Archive task</Button>}</div>
+        <div className="flex flex-wrap gap-2">{canEditTasks(detail) && <Button onClick={() => { setDraft(detail); setDetail(null); }}>Edit task</Button>}{((can('tasks.tasks.delete') && canEditTasks(detail)) || detail.created_by === user.id) && <Button variant="danger-ghost" disabled={busy} onClick={() => perform(async () => { await api.del(`/tasks/${detail.id}`); setDetail(null); }, 'Task deleted')}>Delete task</Button>}</div>
         <p className="whitespace-pre-wrap text-sm">{detail.description || 'No description yet.'}</p><div className="text-sm text-[var(--text-secondary)]">{projects.find(p => p.id === detail.project_id)?.name ?? 'Personal to-do'} · Assigned to {personName(detail.assignee_id)} · {detail.due_date ? `Due ${fmtDate(detail.due_date)}` : 'No deadline'}</div>
         {detail.source_app && <Link href={sourceLink} className="text-sm text-[var(--text-brand)]">Open the linked {detail.source_type} →</Link>}
         <section className="space-y-3"><h3 className="font-semibold">Subtasks</h3>{detail.subtasks.map(t => <button key={t.id} className="block text-sm text-[var(--text-brand)]" onClick={() => openTask(t.id)}>{t.status === 'done' ? '✓ ' : '○ '}{t.title}</button>)}{can('tasks.tasks.create') && canEditTasks(detail) && detail.status !== 'done' && <form className="flex gap-2" onSubmit={e => { e.preventDefault(); perform(async () => { await api.post('/tasks', { title: subtask, parent_id: detail.id }); setSubtask(''); await refreshDetail(); }); }}><Input required aria-label="Subtask title" placeholder="Add a subtask" value={subtask} onChange={e => setSubtask(e.target.value)} /><Button type="submit" loading={busy}>Add</Button></form>}</section>
@@ -368,6 +404,23 @@ export default function TasksClient({ view = 'work' }) {
         </form> : <p className="text-xs text-[var(--text-tertiary)]">Ask a workspace admin to add people who are not listed yet.</p>)}
       </div>}
     </Drawer>
+    <Modal
+      open={Boolean(columnDraft)}
+      onClose={() => setColumnDraft(null)}
+      title={columnDraft?.deleting ? `Delete “${columnDraft.name}”?` : columnDraft?.id ? 'Edit column' : 'Add a column'}
+      description={columnDraft?.deleting ? 'Its tasks move to the column you choose.' : 'Pending, Review, Waiting on client — whatever steps your work goes through.'}
+      footer={<><Button variant="ghost" onClick={() => setColumnDraft(null)} disabled={busy}>Cancel</Button><Button variant={columnDraft?.deleting ? 'danger' : 'primary'} loading={busy} disabled={!columnDraft?.deleting && !columnDraft?.name?.trim()} onClick={saveColumn}>{columnDraft?.deleting ? 'Delete column' : 'Save'}</Button></>}
+    >
+      {columnDraft && (columnDraft.deleting ? (
+        <Label title="Move its tasks to"><Select value={columnDraft.move_to} onChange={e => setColumnDraft({ ...columnDraft, move_to: e.target.value })}>{lanes.filter(l => l.key !== columnDraft.id).map(l => <option key={l.key} value={l.key}>{l.label}</option>)}</Select></Label>
+      ) : (
+        <div className="space-y-4">
+          <Label title="Name"><Input autoFocus value={columnDraft.name} onChange={e => setColumnDraft({ ...columnDraft, name: e.target.value })} placeholder="Pending" maxLength={40} /></Label>
+          <Label title="Counts as"><Select value={columnDraft.status} onChange={e => setColumnDraft({ ...columnDraft, status: e.target.value })}>{Object.entries(STATUSES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select></Label>
+          <p className="text-xs text-[var(--text-tertiary)]">“Counts as” keeps reports right: tasks in a column that counts as Done are finished, the rest are still open.</p>
+        </div>
+      ))}
+    </Modal>
   </div>;
 }
 

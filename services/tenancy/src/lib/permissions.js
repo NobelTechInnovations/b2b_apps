@@ -124,22 +124,24 @@ export async function resolveMemberPermissions(db, { orgId, memberId }) {
     [memberId, orgId],
   );
 
-  for (const row of direct) if (row.effect === 'allow') permissions.add(row.permission);
-  for (const row of direct) if (row.effect === 'deny') permissions.delete(row.permission);
-
   // Administrators run the workspace, so no app is hidden from them.
   const appAccess = roles.includes('admin') ? null : access?.app_access ?? null;
   const limited = limitToApps(permissions, appAccess);
 
   // Sharing an app with someone whose role does nothing in it (an Employee
   // given Leads, say) gives them a Member's everyday access there. Otherwise
-  // the app would be "shared" yet never appear for them.
+  // the app would be "shared" yet never appear for them. Decided on the role
+  // alone, so one extra ability below never replaces the everyday access.
   for (const slug of appAccess ?? []) {
     const working = [...limited].some((p) => p.startsWith(`${slug}.`) && p.split('.')[1] !== 'self');
     if (working) continue;
     for (const permission of memberLevel()) if (permission.startsWith(`${slug}.`)) limited.add(permission);
   }
-  // A permission denied to this person directly stays denied.
+
+  // Extra abilities given to this one person (Lead sources, say), within the
+  // apps they can open; then anything denied to them directly, which always wins.
+  const allowed = limitToApps(new Set(direct.filter((row) => row.effect === 'allow').map((row) => row.permission)), appAccess);
+  for (const permission of allowed) limited.add(permission);
   for (const row of direct) if (row.effect === 'deny') limited.delete(row.permission);
 
   return { roles, permissions: limited, isOwner: false, appAccess };

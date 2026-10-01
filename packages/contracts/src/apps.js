@@ -1320,6 +1320,31 @@ export const categoryBySlug = (slug) => BY_CATEGORY.get(slug) ?? null;
 
 export const allPermissions = () => APPS.flatMap((a) => a.permissions);
 
+/**
+ * Plain words for the abilities people are given one by one. Anything not
+ * listed reads as "<action> <thing>" (`crm.deals.edit` → "Edit deals").
+ */
+const PERMISSION_LABELS = {
+  'leads.team.manage': 'See and work everyone’s leads',
+  'leads.settings.manage': 'Lead sources, fields and stages',
+  'leads.leads.import': 'Import leads',
+  'leads.leads.assign': 'Assign leads to anyone',
+  'leads.leads.delete': 'Delete leads',
+  'crm.leads.manage': 'See everyone’s CRM leads',
+  'hr.leave.manage': 'Leave types and days',
+  'hr.leave.approve': 'Approve leave',
+  'tasks.boards.manage': 'Open and manage every board',
+  'tasks.tasks.delete': 'Delete anyone’s tasks',
+  'tasks.tasks.assign': 'Assign tasks to others',
+};
+
+export function permissionLabel(permission) {
+  if (PERMISSION_LABELS[permission]) return PERMISSION_LABELS[permission];
+  const [, thing = '', action = ''] = String(permission).split('.');
+  const words = (text) => text.replace(/_/g, ' ');
+  return `${words(action).replace(/^\w/, (c) => c.toUpperCase())} ${words(thing)}`.trim();
+}
+
 export const appPermissions = (slug) => appBySlug(slug)?.permissions ?? [];
 
 /** Apps a customer can actually buy today — the marketplace's default view. */

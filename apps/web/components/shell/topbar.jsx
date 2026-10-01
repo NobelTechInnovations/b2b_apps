@@ -1,12 +1,13 @@
 'use client';
 
+import { useState } from 'react';
 import { NotificationBell } from './notification-bell';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   Search, ChevronsUpDown, Check, Plus, LogOut, User, Settings,
   Sun, Moon, Monitor, CreditCard, LifeBuoy, Building2,
-  IdCard,
+  IdCard, KeyRound,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
@@ -16,11 +17,13 @@ import { Button } from '@/components/ui/button';
 import { Avatar, Badge, Kbd } from '@/components/ui/primitives';
 import { Menu, MenuItem, MenuDivider, MenuLabel } from '@/components/ui/menu';
 import { apexUrl, tenantUrl } from '@/lib/tenant';
+import { RequestAccessModal } from './request-access';
 
 export function Topbar({ organizations = [], onOpenSearch }) {
   const router = useRouter();
   const { user, workspace, subscription } = useWorkspace();
   const { theme, setTheme } = useTheme();
+  const [asking, setAsking] = useState(false);
 
   const current = organizations.find((o) => o.id === workspace?.organization?.id) ?? organizations[0];
 
@@ -136,6 +139,9 @@ export function Topbar({ organizations = [], onOpenSearch }) {
         {workspace?.self_service && (
           <MenuItem icon={IdCard} onClick={() => router.push('/portal')}>My employee portal</MenuItem>
         )}
+        {!workspace?.member?.is_owner && (
+          <MenuItem icon={KeyRound} onClick={() => setAsking(true)}>Request access</MenuItem>
+        )}
         <MenuDivider />
         <MenuLabel>Appearance</MenuLabel>
         <MenuItem icon={Sun} selected={theme === 'light'} onClick={() => setTheme('light')}>Light</MenuItem>
@@ -145,6 +151,7 @@ export function Topbar({ organizations = [], onOpenSearch }) {
         <MenuItem icon={LifeBuoy} href="/help">Help & support</MenuItem>
         <MenuItem icon={LogOut} danger onClick={signOut}>Sign out</MenuItem>
       </Menu>
+      <RequestAccessModal open={asking} onClose={() => setAsking(false)} />
     </header>
   );
 }

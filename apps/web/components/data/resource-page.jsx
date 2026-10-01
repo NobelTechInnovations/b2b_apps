@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { Plus, Pencil, Trash2, Inbox } from 'lucide-react';
+import { Plus, Pencil, Trash2, Inbox, Upload, Download, CheckCircle2 } from 'lucide-react';
+import { parseCsv, csvLine, downloadCsv, squash } from '@/lib/csv';
 import { api, ApiError } from '@/lib/api';
 import { money, date as fmtDate } from '@/lib/format';
 import { useWorkspace } from '@/lib/workspace';
@@ -30,7 +31,7 @@ export function ResourcePage({
   columns, filters = [], searchPlaceholder = 'Search…', fields = [], defaults = {},
   detail, detailItems, actions, headerActions, stats, emptyIcon: EmptyIcon = Inbox, emptyText,
   toForm, fromForm, query: fixedQuery, drawerWidth = 'md', titleOf = (r) => r.name ?? r.title ?? r.number, subtitleOf, badgeOf,
-  onChanged, rowAction,
+  onChanged, rowAction, importable,
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -47,6 +48,7 @@ export function ResourcePage({
   const [editing, setEditing] = useState(null); // {} = new
   const [openId, setOpenId] = useState(null);
   const [version, setVersion] = useState(0);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     if (params.get('new') === '1' && can(permissions.create)) setEditing({ ...defaults });
@@ -81,6 +83,9 @@ export function ResourcePage({
         actions={
           <div className="flex flex-wrap gap-2">
             {headerActions}
+            {fields.length > 0 && can(permissions.create) && importable !== false && (
+              <Button variant="secondary" icon={Upload} onClick={() => setImporting(true)}>Import CSV</Button>
+            )}
             {fields.length > 0 && can(permissions.create) && (
               <Button variant="primary" icon={Plus} onClick={() => setEditing({ ...defaults })}>New {entity}</Button>
             )}
@@ -133,6 +138,19 @@ export function ResourcePage({
           </Table>
           <Pagination meta={meta} onPage={setPage} />
         </>
+      )}
+
+      {importing && (
+        <ImportModal
+          title={title}
+          entity={entity}
+          endpoint={endpoint}
+          fields={fields}
+          defaults={defaults}
+          fromForm={fromForm}
+          onClose={() => setImporting(false)}
+          onDone={() => reload()}
+        />
       )}
 
       {editing && (
@@ -448,5 +466,215 @@ function ChecklistField({ field: f, value = [], onChange, error }) {
       <Button type="button" size="sm" variant="secondary" icon={Plus} onClick={() => onChange([...items, { label: '' }])}>Add</Button>
       {error && <p className="text-xs text-[var(--color-critical-600)]">{error}</p>}
     </div>
+  );
+}
+
+/* ── CSV import ───────────────────────────────────────────────────────────── */
+
+const TRUE_WORDS = new Set(['yes', 'y', 'true', '1', 'active', 'on']);
+const FALSE_WORDS = new Set(['no', 'n', 'false', '0', 'inactive', 'off']);
+
+/** `15/08/2026`, `15-08-2026`, `2026-08-15` → `2026-08-15`. */
+function isoDate(text) {
+  const value = String(text).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  const dmy = value.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+  return dmy ? `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}` : value;
+}
+
+/**
+ * Bring a spreadsheet into any list screen: match its columns to the screen's
+ * own fields, turn each cell into the field's type, and send the rows to
+ * `<endpoint>/import`, which applies the same rules as the form.
+ */
+function ImportModal({ title, entity, endpoint, fields, defaults, fromForm, onClose, onDone }) {
+  const toast = useToast();
+  const importable = useMemo(() => fields.filter((f) => !f.readOnly && f.type !== 'checklist'), [fields]);
+  const [sheet, setSheet] = useState(null);
+  const [fileName, setFileName] = useState('');
+  const [mapping, setMapping] = useState({});
+  const [options, setOptions] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState(null);
+  const [result, setResult] = useState(null);
+
+  // Linked fields (vendor, category, person) are matched by name.
+  useEffect(() => {
+    for (const f of importable.filter((x) => x.type === 'relation' || x.type === 'person')) {
+      const url = f.type === 'person' ? (f.endpoint ?? '/members') : f.endpoint;
+      if (!url) continue;
+      api.get(url, { query: f.query ?? (f.type === 'person' ? { status: 'active', limit: 100 } : { limit: 100 }) })
+        .then((r) => setOptions((o) => ({ ...o, [f.key]: r.data ?? [] })))
+        .catch(() => {});
+    }
+  }, [importable]);
+
+  async function readFile(file) {
+    setProblem(null);
+    setResult(null);
+    if (!file) return;
+    if (/\.xlsx?$/i.test(file.name)) { setProblem('That is an Excel file. In Excel choose File → Save As → CSV, then choose the .csv.'); return; }
+    if (file.size > 4 * 1024 * 1024) { setProblem('That file is larger than 4 MB. Split it into smaller files.'); return; }
+    const parsed = parseCsv(await file.text());
+    if (!parsed.rows.length) { setProblem('That file has no rows under its header line.'); return; }
+    setFileName(file.name);
+    setSheet(parsed);
+    setMapping(Object.fromEntries(parsed.headers.map((h) => {
+      const match = importable.find((f) => squash(f.key) === squash(h) || squash(f.label) === squash(h));
+      return [h, match?.key ?? ''];
+    })));
+  }
+
+  function template() {
+    downloadCsv(`${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-template.csv`, [csvLine(importable.map((f) => f.label))]);
+  }
+
+  /** One spreadsheet row → the body the form would have sent, or a reason it cannot be. */
+  function convert(raw) {
+    const payload = {};
+    for (const [header, key] of Object.entries(mapping)) {
+      if (!key) continue;
+      const f = importable.find((x) => x.key === key);
+      const cell = String(raw[header] ?? '').trim();
+      if (!cell) continue;
+      if (f.type === 'number' || f.type === 'money') {
+        const n = Number(cell.replace(/[,₹\s]/g, ''));
+        if (!Number.isFinite(n)) return { error: `${f.label}: “${cell}” is not a number` };
+        payload[key] = f.type === 'money' ? n.toFixed(2) : n;
+      } else if (f.type === 'date') payload[key] = isoDate(cell);
+      else if (f.type === 'checkbox') {
+        const word = cell.toLowerCase();
+        if (!TRUE_WORDS.has(word) && !FALSE_WORDS.has(word)) return { error: `${f.label}: use Yes or No` };
+        payload[key] = TRUE_WORDS.has(word);
+      } else if (f.type === 'select') {
+        const option = f.options.find((o) => String(o.value).toLowerCase() === cell.toLowerCase() || String(o.label).toLowerCase() === cell.toLowerCase());
+        if (!option) return { error: `${f.label}: “${cell}” is not one of the choices` };
+        payload[key] = option.value;
+      } else if (f.type === 'relation' || f.type === 'person') {
+        const valueKey = f.valueKey ?? (f.type === 'person' ? 'user_id' : 'id');
+        const labelOf = f.labelOf ?? ((o) => o[f.labelKey ?? 'name'] ?? o.email ?? o.id);
+        const found = (options[key] ?? []).find((o) => String(o[valueKey]) === cell || String(labelOf(o)).toLowerCase() === cell.toLowerCase() || String(o.email ?? '').toLowerCase() === cell.toLowerCase());
+        if (!found) return { error: `${f.label}: no “${cell}” found` };
+        payload[key] = found[valueKey];
+      } else payload[key] = cell;
+    }
+    const withDefaults = { ...Object.fromEntries(Object.entries(defaults ?? {}).filter(([k]) => importable.some((f) => f.key === k))), ...payload };
+    try {
+      return { row: fromForm ? fromForm(withDefaults, withDefaults, {}) : withDefaults };
+    } catch {
+      return { row: withDefaults };
+    }
+  }
+
+  async function run() {
+    setBusy(true);
+    setProblem(null);
+    const totals = { created: 0, failed: 0, errors: [] };
+    try {
+      const prepared = sheet.rows.map((raw, index) => ({ index, ...convert(raw) }));
+      for (const bad of prepared.filter((p) => p.error)) {
+        totals.failed += 1;
+        if (totals.errors.length < 100) totals.errors.push({ row: bad.index + 2, message: bad.error });
+      }
+      const good = prepared.filter((p) => !p.error);
+      // Sent in groups; each group says which file line it starts at.
+      for (let start = 0; start < good.length; start += 500) {
+        const chunk = good.slice(start, start + 500);
+        // The server numbers this group's rows from 1; map them back to file lines.
+        const response = await api.post(`${endpoint}/import`, { rows: chunk.map((c) => c.row), first_line: 1 });
+        totals.created += response.data.created;
+        totals.failed += response.data.failed;
+        for (const e of response.data.errors) {
+          if (totals.errors.length < 100) totals.errors.push({ row: chunk[e.row - 1].index + 2, message: e.message });
+        }
+      }
+      totals.errors.sort((a, b) => a.row - b.row);
+      setResult(totals);
+      if (totals.created) {
+        toast.success(`${totals.created} ${entity}${totals.created === 1 ? '' : 's'} imported`);
+        onDone();
+      }
+    } catch (err) {
+      setProblem(err instanceof ApiError ? err.message : 'The import failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const missing = importable.filter((f) => f.required && !Object.values(mapping).includes(f.key));
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="xl"
+      title={`Import ${title.toLowerCase()}`}
+      description="From a CSV file (in Excel: File → Save As → CSV). Each row is checked the same way as the New form."
+      footer={result ? (
+        <Button variant="primary" onClick={onClose}>Done</Button>
+      ) : (
+        <>
+          <Button variant="ghost" icon={Download} onClick={template}>Download template</Button>
+          <div className="flex-1" />
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="primary" icon={Upload} loading={busy} disabled={!sheet || missing.length > 0} onClick={run}>
+            {sheet ? `Import ${sheet.rows.length} row${sheet.rows.length === 1 ? '' : 's'}` : 'Import'}
+          </Button>
+        </>
+      )}
+    >
+      <div className="space-y-4">
+        {problem && <Alert tone="critical">{problem}</Alert>}
+        {result ? (
+          <div className="space-y-3">
+            <p className="flex items-center gap-2 text-base font-medium"><CheckCircle2 className="size-5 text-[var(--color-positive-500)]" />{result.created} added · {result.failed} skipped</p>
+            {result.errors.length > 0 && (
+              <Alert tone="caution" title="Rows that were skipped">
+                <ul className="mt-1 max-h-48 space-y-0.5 overflow-y-auto text-sm">
+                  {result.errors.map((e) => <li key={`${e.row}-${e.message}`}>Line {e.row}: {e.message}</li>)}
+                </ul>
+              </Alert>
+            )}
+          </div>
+        ) : (
+          <>
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-[var(--radius-xl)] border-2 border-dashed border-[var(--border-default)] px-6 py-8 text-center hover:bg-[var(--surface-hover)]">
+              <Upload className="size-5 text-[var(--text-tertiary)]" />
+              <span className="font-medium">{fileName || 'Choose a CSV file'}</span>
+              <span className="text-xs text-[var(--text-tertiary)]">Up to 4 MB. The first line must be the column names.</span>
+              <input type="file" accept=".csv,text/csv,.xlsx,.xls" className="sr-only" onChange={(e) => readFile(e.target.files?.[0])} />
+            </label>
+            {sheet && (
+              <>
+                <p className="text-sm text-[var(--text-secondary)]">{sheet.rows.length} rows found. Match each column to a field, or skip it.</p>
+                <div className="max-h-72 overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--border-subtle)]">
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {sheet.headers.map((h) => (
+                        <tr key={h} className="border-b border-[var(--border-subtle)] last:border-0">
+                          <td className="px-3 py-2 font-medium">{h}</td>
+                          <td className="max-w-[12rem] truncate px-3 py-2 text-[var(--text-tertiary)]">{sheet.rows.slice(0, 2).map((r) => r[h]).filter(Boolean).join(' · ') || '—'}</td>
+                          <td className="px-3 py-2">
+                            <Select value={mapping[h] ?? ''} onChange={(e) => setMapping((m) => ({ ...m, [h]: e.target.value }))} aria-label={`Field for ${h}`}>
+                              <option value="">Skip this column</option>
+                              {importable.map((f) => (
+                                <option key={f.key} value={f.key} disabled={Object.entries(mapping).some(([k, v]) => v === f.key && k !== h)}>
+                                  {f.label}{f.required ? ' *' : ''}
+                                </option>
+                              ))}
+                            </Select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {missing.length > 0 && <Alert tone="caution">Match a column to {missing.map((f) => f.label).join(', ')} — {missing.length === 1 ? 'it is' : 'they are'} required.</Alert>}
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }

@@ -8,6 +8,7 @@ import { appBySlug } from '@nexus/contracts';
 import { WorkspaceProvider } from '@/lib/workspace';
 import { Button } from '@/components/ui/button';
 import { Card, EmptyState } from '@/components/ui/primitives';
+import { RequestAccessModal } from './request-access';
 import { Sidebar } from './sidebar';
 import { Topbar } from './topbar';
 import { CommandPalette } from './command-palette';
@@ -72,6 +73,7 @@ export function AppShell({ workspace, organizations, children }) {
  */
 function AppAccessGuard({ workspace, children }) {
   const pathname = usePathname();
+  const [asking, setAsking] = useState(false);
   const app = appBySlug(pathname?.split('/')[1]);
   const blocked = app && !app.core
     && (workspace?.workspace_apps ?? []).includes(app.slug)
@@ -82,9 +84,15 @@ function AppAccessGuard({ workspace, children }) {
       <EmptyState
         icon={Lock}
         title={`You don't have access to ${app.name}`}
-        description="Your workspace uses this app, but it hasn't been shared with you. Ask a workspace owner or admin to give you access in Settings → People."
-        action={<Link href="/dashboard"><Button variant="secondary">Back to dashboard</Button></Link>}
+        description="Your workspace uses this app, but it hasn't been shared with you. Ask for it and an owner or admin gets a notification."
+        action={
+          <div className="flex justify-center gap-2">
+            <Button variant="primary" onClick={() => setAsking(true)}>Request access</Button>
+            <Link href="/dashboard"><Button variant="secondary">Back to dashboard</Button></Link>
+          </div>
+        }
       />
+      <RequestAccessModal open={asking} onClose={() => setAsking(false)} appSlug={app.slug} />
     </Card>
   );
 }

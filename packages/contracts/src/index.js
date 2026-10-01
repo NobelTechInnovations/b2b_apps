@@ -8,6 +8,7 @@ export {
   flagshipApps,
   allPermissions,
   appPermissions,
+  permissionLabel,
   allServices,
   resolveDependencies,
   dependentsOf,

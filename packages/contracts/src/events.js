@@ -18,6 +18,8 @@ export const EVENTS = {
   MEMBER_INVITED: 'tenancy.member.invited',
   MEMBER_JOINED: 'tenancy.member.joined',
   MEMBER_ROLE_CHANGED: 'tenancy.member.role_changed',
+  ACCESS_REQUESTED: 'tenancy.access.requested',
+  ACCESS_DECIDED: 'tenancy.access.decided',
   MEMBER_REMOVED: 'tenancy.member.removed',
   ROLE_UPDATED: 'tenancy.role.updated',
 

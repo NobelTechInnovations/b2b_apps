@@ -56,7 +56,9 @@ export function loadRootEnv(root = process.cwd()) {
 export function databaseFor(db, env) {
   if (!db) return {};
   if (env.DATABASE_URL) {
-    return { DATABASE_URL: env.DATABASE_URL, DB_SCHEMA: `nexus_${db}` };
+    // DB_SCHEMA_PREFIX (`dev_`) lets a local copy share a hosted database with
+    // a live one without touching its data: every schema gets its own name.
+    return { DATABASE_URL: env.DATABASE_URL, DB_SCHEMA: `${env.DB_SCHEMA_PREFIX || 'nexus_'}${db}` };
   }
   const user = encodeURIComponent(env.PG_USER ?? 'nexus');
   const password = encodeURIComponent(env.PG_PASSWORD ?? 'nexus');

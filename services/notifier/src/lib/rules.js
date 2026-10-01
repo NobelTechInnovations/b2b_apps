@@ -193,6 +193,20 @@ export const RULES = {
     link: `/expenses?claim=${d.claim_id}`,
   }],
 
+  // ── access ────────────────────────────────────────────────────────────
+  [EVENTS.ACCESS_REQUESTED]: (d) => [{
+    kind: 'access.requested', app: 'core', users: { permission: 'core.roles.manage' },
+    title: `${d.name ?? 'Someone'} asked for ${d.ability ? `“${d.ability}”${d.app_name ? ` in ${d.app_name}` : ''}` : d.app_name ? `access to ${d.app_name}` : 'access'}`,
+    body: d.note ?? null,
+    link: '/settings/members?requests=1',
+  }],
+  [EVENTS.ACCESS_DECIDED]: (d) => [{
+    kind: 'access.decided', app: 'core', users: [d.user_id],
+    title: `${d.approved ? 'Approved' : 'Declined'}: ${d.ability ?? (d.app_name ? `access to ${d.app_name}` : 'your access request')}`,
+    body: d.note ?? (d.approved ? 'It is ready to use now.' : null),
+    link: '/dashboard',
+  }],
+
   // ── leads ─────────────────────────────────────────────────────────────
   [EVENTS.LEAD_ASSIGNED]: (d) => (d.owner_user_id ? [{
     kind: 'leads.assigned', app: 'leads', users: [d.owner_user_id],

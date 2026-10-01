@@ -9,7 +9,11 @@ const taskFields = {
   assignee_id: nullable(v.id('usr')), due_date: nullable(v.date),
   status: v.enum(['todo', 'in_progress', 'blocked', 'done']),
   priority: v.enum(['low', 'medium', 'high', 'urgent']),
+  // A board's own column ("Pending", "Review"); it decides the status.
+  column_id: nullable(v.id('col')),
 };
+const STATES = ['todo', 'in_progress', 'blocked', 'done'];
+const DEFAULT_COLUMNS = [['To do', 'todo'], ['Working on it', 'in_progress'], ['Stuck', 'blocked'], ['Done', 'done']];
 const boardFields = {
   name: v.text(160), description: v.longText, due_date: nullable(v.date),
   visibility: v.enum(['workspace', 'private']),
@@ -99,6 +103,32 @@ export async function taskRoutes(app) {
       throw notFound('Task');
     }
     return row;
+  }
+
+  /** A board's columns, created from the four task states the first time they are needed. */
+  async function columns(store, orgId, projectId) {
+    const rows = await store.rows('SELECT * FROM board_columns WHERE org_id = $1 AND project_id = $2 ORDER BY position, created_at', [orgId, projectId]);
+    if (rows.length) return rows;
+    await store.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`columns:${projectId}`]).catch(() => {});
+    const again = await store.rows('SELECT * FROM board_columns WHERE org_id = $1 AND project_id = $2 ORDER BY position, created_at', [orgId, projectId]);
+    if (again.length) return again;
+    const created = [];
+    for (const [index, [name, status]] of DEFAULT_COLUMNS.entries()) {
+      created.push(await store.one(
+        'INSERT INTO board_columns (id, org_id, project_id, name, status, position) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+        [id('col'), orgId, projectId, name, status, index],
+      ));
+    }
+    return created;
+  }
+
+  /** The column a task is being put in, which must be on the task's board. */
+  async function columnFor(store, orgId, projectId, columnId) {
+    if (!columnId) return null;
+    if (!projectId) throw badRequest('Only tasks on a board go in a board column.');
+    const column = await store.one('SELECT * FROM board_columns WHERE org_id = $1 AND id = $2 AND project_id = $3', [orgId, columnId, projectId]);
+    if (!column) throw badRequest('That column is not on this board.');
+    return column;
   }
 
   /** What tenancy says about a workspace member: active? which permissions? */
@@ -327,6 +357,85 @@ export async function taskRoutes(app) {
     return { data: users.map((u) => ({ user_id: u.id, name: u.name, email: u.email, avatar_url: u.avatar_url ?? null })) };
   });
 
+  // ── Kanban columns ────────────────────────────────────────────────────────
+  const columnParams = { params: params({ projectId: v.id('prj'), columnId: v.id('col') }) };
+  const columnBody = { name: v.text(40), status: v.enum(STATES) };
+
+  app.get('/tasks/projects/:projectId/columns', { preHandler: guard('tasks.projects.view'), schema: boardId }, async (r) => {
+    const p = await board(db, r, r.params.projectId);
+    return { data: await db.transaction((tx) => columns(tx, r.ctx.orgId, p.id)) };
+  });
+
+  // Anyone who can change the board's tasks can add, rename and reorder its columns.
+  app.post('/tasks/projects/:projectId/columns', { preHandler: guard('tasks.projects.view'), schema: { ...boardId, body: body(columnBody, ['name']) } }, async (r, reply) => {
+    if (!r.body.name.trim()) throw badRequest('Name the column.');
+    const row = await db.transaction(async (tx) => {
+      const p = await board(tx, r, r.params.projectId, 'edit');
+      const existing = await columns(tx, r.ctx.orgId, p.id);
+      if (existing.length >= 20) throw badRequest('A board can have up to 20 columns.');
+      return tx.one(
+        `INSERT INTO board_columns (id, org_id, project_id, name, status, position, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [id('col'), r.ctx.orgId, p.id, r.body.name.trim(), r.body.status ?? 'todo', Math.max(...existing.map((c) => c.position)) + 1, r.ctx.userId],
+      );
+    });
+    return reply.code(201).send({ data: row });
+  });
+
+  app.patch('/tasks/projects/:projectId/columns/:columnId', { preHandler: guard('tasks.projects.view'), schema: { ...columnParams, body: body(columnBody) } }, async (r) => {
+    if (r.body.name !== undefined && !r.body.name.trim()) throw badRequest('Name the column.');
+    const row = await db.transaction(async (tx) => {
+      const p = await board(tx, r, r.params.projectId, 'edit');
+      const old = await columnFor(tx, r.ctx.orgId, p.id, r.params.columnId);
+      const updated = await tx.one(
+        'UPDATE board_columns SET name = COALESCE($3, name), status = COALESCE($4, status) WHERE org_id = $1 AND id = $2 RETURNING *',
+        [r.ctx.orgId, old.id, r.body.name?.trim() ?? null, r.body.status ?? null],
+      );
+      // Its tasks follow what the column now counts as.
+      if (updated.status !== old.status) {
+        await tx.query(
+          `UPDATE tasks SET status = $3, completed_at = CASE WHEN $3 = 'done' THEN COALESCE(completed_at, now()) ELSE NULL END, updated_at = now()
+            WHERE org_id = $1 AND column_id = $2 AND archived_at IS NULL`,
+          [r.ctx.orgId, old.id, updated.status],
+        );
+      }
+      return updated;
+    });
+    return { data: row };
+  });
+
+  app.put('/tasks/projects/:projectId/columns', { preHandler: guard('tasks.projects.view'), schema: { ...boardId, body: body({ ids: { type: 'array', items: v.id('col'), minItems: 1, maxItems: 20 } }, ['ids']) } }, async (r) => {
+    const p = await board(db, r, r.params.projectId, 'edit');
+    await db.query(
+      `UPDATE board_columns c SET position = o.n - 1 FROM unnest($3::text[]) WITH ORDINALITY AS o(id, n)
+        WHERE c.org_id = $1 AND c.project_id = $2 AND c.id = o.id`,
+      [r.ctx.orgId, p.id, r.body.ids],
+    );
+    return { data: await db.transaction((tx) => columns(tx, r.ctx.orgId, p.id)) };
+  });
+
+  // Removing a column is the board owner's call; its tasks move to another column.
+  app.delete('/tasks/projects/:projectId/columns/:columnId', { preHandler: guard('tasks.projects.view'), schema: { ...columnParams, body: body({ move_to: v.id('col') }, ['move_to']) } }, async (r) => {
+    await db.transaction(async (tx) => {
+      const p = await board(tx, r, r.params.projectId, 'manage');
+      const all = await columns(tx, r.ctx.orgId, p.id);
+      const gone = all.find((c) => c.id === r.params.columnId);
+      const target = all.find((c) => c.id === r.body.move_to);
+      if (!gone) throw notFound('Column');
+      if (!target || target.id === gone.id) throw badRequest('Choose another column for its tasks.');
+      const firstOfState = all.find((c) => c.status === gone.status)?.id === gone.id;
+      await tx.query(
+        `UPDATE tasks SET column_id = $4, status = $5,
+                completed_at = CASE WHEN $5 = 'done' THEN COALESCE(completed_at, now()) ELSE NULL END, updated_at = now()
+          WHERE org_id = $1 AND project_id = $2 AND archived_at IS NULL
+            AND (column_id = $3 OR ($6 AND column_id IS NULL AND status = $7))`,
+        [r.ctx.orgId, p.id, gone.id, target.id, target.status, firstOfState, gone.status],
+      );
+      await tx.query('DELETE FROM board_columns WHERE org_id = $1 AND id = $2', [r.ctx.orgId, gone.id]);
+    });
+    return { data: { deleted: true } };
+  });
+
   // ── milestones ────────────────────────────────────────────────────────────
   app.get('/tasks/projects/:projectId/milestones', { preHandler: guard('tasks.projects.view'), schema: boardId }, async (r) => {
     await board(db, r, r.params.projectId);
@@ -382,9 +491,11 @@ export async function taskRoutes(app) {
         b.project_id = parent.project_id;
       }
       await references(tx, r, b);
-      const created = await tx.one(`INSERT INTO tasks(id,org_id,project_id,parent_id,milestone_id,title,description,status,priority,assignee_id,due_date,source_app,source_type,source_id,created_by,completed_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,CASE WHEN $8='done' THEN now() ELSE NULL END) RETURNING *`,
-      [id('tsk'), r.ctx.orgId, b.project_id ?? null, b.parent_id ?? null, b.milestone_id ?? null, b.title.trim(), b.description ?? '', b.status ?? 'todo', b.priority ?? 'medium', b.assignee_id ?? null, b.due_date ?? null, b.source_app ?? null, b.source_type ?? null, b.source_id ?? null, r.ctx.userId]);
+      const column = await columnFor(tx, r.ctx.orgId, b.project_id, b.column_id);
+      if (column) b.status = column.status;
+      const created = await tx.one(`INSERT INTO tasks(id,org_id,project_id,parent_id,milestone_id,title,description,status,priority,assignee_id,due_date,source_app,source_type,source_id,created_by,completed_at,column_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,CASE WHEN $8='done' THEN now() ELSE NULL END,$16) RETURNING *`,
+      [id('tsk'), r.ctx.orgId, b.project_id ?? null, b.parent_id ?? null, b.milestone_id ?? null, b.title.trim(), b.description ?? '', b.status ?? 'todo', b.priority ?? 'medium', b.assignee_id ?? null, b.due_date ?? null, b.source_app ?? null, b.source_type ?? null, b.source_id ?? null, r.ctx.userId, column?.id ?? null]);
       emit(tx, r, EVENTS.TASK_CREATED, created);
       // Creating a task with somebody's name on it is assigning it to them.
       if (created.assignee_id) emit(tx, r, EVENTS.TASK_ASSIGNED, created);
@@ -423,7 +534,18 @@ export async function taskRoutes(app) {
   app.patch('/tasks/:taskId', { preHandler: guard('tasks.tasks.edit'), schema: { ...routeId, body: body(taskFields) } }, async (r) => ({ data: await db.transaction(async (tx) => {
     await lockWorkspace(tx, r.ctx.orgId);
     const old = await task(tx, r, r.params.taskId, { lock: true, need: 'edit' });
-    const b = r.body, next = { ...old, ...b };
+    const b = { ...r.body };
+    // Moving to a column sets the status; a new status alone (or another board)
+    // drops the task into the first column for that status. Sent together and
+    // disagreeing (the edit form changed the status), the status wins.
+    const boardChanged = b.project_id !== undefined && b.project_id !== old.project_id;
+    let column = boardChanged
+      ? await columnFor(tx, r.ctx.orgId, b.project_id, b.column_id).catch(() => null)
+      : await columnFor(tx, r.ctx.orgId, old.project_id, b.column_id);
+    if (column && b.status !== undefined && b.status !== column.status) column = null;
+    if (column) b.status = column.status;
+    else if (b.column_id !== undefined || b.status !== undefined || boardChanged) b.column_id = null;
+    const next = { ...old, ...b };
     if (b.project_id !== undefined && b.project_id !== old.project_id) {
       const child = await tx.one('SELECT id FROM tasks WHERE org_id=$1 AND parent_id=$2 AND archived_at IS NULL LIMIT 1', [r.ctx.orgId, old.id]);
       if (old.parent_id || child) throw badRequest('A task with a parent or subtasks cannot move between boards.');
@@ -438,16 +560,21 @@ export async function taskRoutes(app) {
     }
     await references(tx, r, b, old);
     const row = await tx.one(`UPDATE tasks SET title=$3,description=$4,project_id=$5,milestone_id=$6,status=$7,priority=$8,
-      assignee_id=$9,due_date=$10,completed_at=CASE WHEN $7='done' THEN COALESCE(completed_at,now()) ELSE NULL END,updated_at=now()
-      WHERE org_id=$1 AND id=$2 RETURNING *`, [r.ctx.orgId, old.id, next.title.trim(), next.description, next.project_id, next.milestone_id, next.status, next.priority, next.assignee_id, next.due_date]);
+      assignee_id=$9,due_date=$10,completed_at=CASE WHEN $7='done' THEN COALESCE(completed_at,now()) ELSE NULL END,column_id=$11,updated_at=now()
+      WHERE org_id=$1 AND id=$2 RETURNING *`, [r.ctx.orgId, old.id, next.title.trim(), next.description, next.project_id, next.milestone_id, next.status, next.priority, next.assignee_id, next.due_date, next.column_id ?? null]);
     if (row.assignee_id && row.assignee_id !== old.assignee_id) emit(tx, r, EVENTS.TASK_ASSIGNED, row);
     if (row.status === 'done' && old.status !== 'done') emit(tx, r, EVENTS.TASK_COMPLETED, row);
     return row;
   }) }));
-  app.delete('/tasks/:taskId', { preHandler: guard('tasks.tasks.delete'), schema: routeId }, async (r) => {
+  // Whoever created a task may delete it; deleting other people's needs tasks.tasks.delete.
+  app.delete('/tasks/:taskId', { preHandler: guard('tasks.tasks.view'), schema: routeId }, async (r) => {
     await db.transaction(async (tx) => {
       await lockWorkspace(tx, r.ctx.orgId);
-      await task(tx, r, r.params.taskId, { lock: true, need: 'edit' });
+      const row = await task(tx, r, r.params.taskId, { lock: true });
+      if (row.created_by !== r.ctx.userId) {
+        if (!r.ctx.can('tasks.tasks.delete')) throw forbidden('You can delete the tasks you created. Ask the board owner to remove this one.');
+        await task(tx, r, r.params.taskId, { need: 'edit' });
+      }
       const child = await tx.one('SELECT id FROM tasks WHERE org_id=$1 AND parent_id=$2 AND archived_at IS NULL LIMIT 1', [r.ctx.orgId, r.params.taskId]);
       if (child) throw badRequest('Archive the subtasks first.');
       await tx.query('UPDATE tasks SET archived_at=now() WHERE org_id=$1 AND id=$2', [r.ctx.orgId, r.params.taskId]);

@@ -21,9 +21,17 @@ import { quietErrors } from './quiet.js';
  * connection is held while handlers run, which matters when a hosted
  * database allows each service only one or two.
  */
+/**
+ * Which schema holds the log. `nexus_bus` in every deployment; a local copy
+ * sharing a hosted database with a live one sets DB_SCHEMA_PREFIX (`dev_`) so
+ * the two never read each other's events.
+ */
+const BUS = process.env.BUS_SCHEMA || `${process.env.DB_SCHEMA_PREFIX || 'nexus_'}bus`;
+if (!/^[a-z_][a-z0-9_]{0,62}$/.test(BUS)) throw new Error(`invalid bus schema name: ${BUS}`);
+
 const SCHEMA = `
-  CREATE SCHEMA IF NOT EXISTS nexus_bus;
-  CREATE TABLE IF NOT EXISTS nexus_bus.events (
+  CREATE SCHEMA IF NOT EXISTS ${BUS};
+  CREATE TABLE IF NOT EXISTS ${BUS}.events (
     seq        bigserial PRIMARY KEY,
     id         text NOT NULL UNIQUE,
     type       text NOT NULL,
@@ -31,15 +39,15 @@ const SCHEMA = `
     payload    jsonb NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
   );
-  CREATE INDEX IF NOT EXISTS events_created_idx ON nexus_bus.events (created_at);
-  CREATE TABLE IF NOT EXISTS nexus_bus.consumers (
+  CREATE INDEX IF NOT EXISTS events_created_idx ON ${BUS}.events (created_at);
+  CREATE TABLE IF NOT EXISTS ${BUS}.consumers (
     durable    text PRIMARY KEY,
     last_seq   bigint NOT NULL DEFAULT 0,
     updated_at timestamptz NOT NULL DEFAULT now()
   );
-  ALTER TABLE nexus_bus.consumers ADD COLUMN IF NOT EXISTS leased_by text;
-  ALTER TABLE nexus_bus.consumers ADD COLUMN IF NOT EXISTS leased_until timestamptz;
-  CREATE TABLE IF NOT EXISTS nexus_bus.dead (
+  ALTER TABLE ${BUS}.consumers ADD COLUMN IF NOT EXISTS leased_by text;
+  ALTER TABLE ${BUS}.consumers ADD COLUMN IF NOT EXISTS leased_until timestamptz;
+  CREATE TABLE IF NOT EXISTS ${BUS}.dead (
     id         bigserial PRIMARY KEY,
     durable    text NOT NULL,
     event_id   text NOT NULL,
@@ -109,7 +117,7 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
    */
   async function runConsumer(consumer, events, upTo) {
     const lease = await db.one(
-      `UPDATE nexus_bus.consumers
+      `UPDATE ${BUS}.consumers
           SET leased_by = $2, leased_until = now() + ($3 || ' milliseconds')::interval
         WHERE durable = $1 AND (leased_until IS NULL OR leased_until < now() OR leased_by = $2)
         RETURNING last_seq`,
@@ -129,7 +137,7 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
       if (consumer.running) last = Math.max(last, upTo);
     } finally {
       await db.query(
-        `UPDATE nexus_bus.consumers SET last_seq = GREATEST(last_seq, $3), leased_by = NULL, leased_until = NULL,
+        `UPDATE ${BUS}.consumers SET last_seq = GREATEST(last_seq, $3), leased_by = NULL, leased_until = NULL,
                 updated_at = now()
           WHERE durable = $1 AND leased_by = $2`,
         [consumer.durable, holder, last],
@@ -152,7 +160,7 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
         );
         if (attempt === consumer.maxDeliver) {
           await db.query(
-            `INSERT INTO nexus_bus.dead (durable, event_id, seq, error, attempts) VALUES ($1, $2, $3, $4, $5)`,
+            `INSERT INTO ${BUS}.dead (durable, event_id, seq, error, attempts) VALUES ($1, $2, $3, $4, $5)`,
             [consumer.durable, event.id, event.seq, String(error?.message ?? error).slice(0, 2000), attempt],
           );
           return;
@@ -177,7 +185,7 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
       if (list.length) {
         const from = Math.min(...list.map((c) => c.seq));
         const events = await db.rows(
-          `SELECT seq, id, type, payload FROM nexus_bus.events
+          `SELECT seq, id, type, payload FROM ${BUS}.events
             WHERE seq > $1 AND created_at < now() - ($2 || ' milliseconds')::interval
             ORDER BY seq LIMIT 500`,
           [from, SETTLE_MS],
@@ -204,7 +212,7 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
           }
           if (skipped.length) {
             await db.query(
-              `UPDATE nexus_bus.consumers c SET last_seq = $2, updated_at = now()
+              `UPDATE ${BUS}.consumers c SET last_seq = $2, updated_at = now()
                 WHERE c.durable = ANY($1) AND c.last_seq < $2
                   AND (c.leased_until IS NULL OR c.leased_until < now())`,
               [skipped.map((c) => c.durable), upTo],
@@ -216,7 +224,7 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
       if (Date.now() - lastSweep > 3_600_000) {
         lastSweep = Date.now();
         await db.query(
-          `DELETE FROM nexus_bus.events WHERE created_at < now() - ($1 || ' days')::interval`,
+          `DELETE FROM ${BUS}.events WHERE created_at < now() - ($1 || ' days')::interval`,
           [RETENTION_DAYS],
         );
       }
@@ -248,7 +256,7 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
         occurredAt: event.created_at ?? event.occurred_at,
       });
       await db.query(
-        `INSERT INTO nexus_bus.events (id, type, org_id, payload) VALUES ($1, $2, $3, $4)
+        `INSERT INTO ${BUS}.events (id, type, org_id, payload) VALUES ($1, $2, $3, $4)
          ON CONFLICT (id) DO NOTHING`,
         [payload.id, payload.type, payload.org_id ?? null, JSON.stringify(payload)],
       );
@@ -264,8 +272,8 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
     async subscribe(consumerName, pattern, handler, { maxDeliver = 5, from = 'all' } = {}) {
       const durable = `${consumerName}--${pattern.replace(/[.*>]/g, '_')}`;
       const row = await db.one(
-        `INSERT INTO nexus_bus.consumers (durable, last_seq)
-         VALUES ($1, CASE WHEN $2 THEN (SELECT COALESCE(max(seq), 0) FROM nexus_bus.events) ELSE 0 END)
+        `INSERT INTO ${BUS}.consumers (durable, last_seq)
+         VALUES ($1, CASE WHEN $2 THEN (SELECT COALESCE(max(seq), 0) FROM ${BUS}.events) ELSE 0 END)
          ON CONFLICT (durable) DO UPDATE SET durable = EXCLUDED.durable
          RETURNING last_seq`,
         [durable, from === 'new'],

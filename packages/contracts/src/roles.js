@@ -63,7 +63,10 @@ export const SYSTEM_ROLES = [
     // an employee sees only boards they were added to and their own to-dos.
     // Expenses are safe too: without approve/reimburse, a person only ever
     // sees and edits their own claims.
-    grants: ['*.self.*', 'tasks.tasks.view', 'tasks.tasks.create', 'tasks.tasks.edit', 'tasks.projects.view', 'tasks.time.view', 'tasks.time.log',
+    // Employees make their own boards too: private to them and whoever they
+    // share with (owners and admins can still open every board).
+    grants: ['*.self.*', 'tasks.tasks.view', 'tasks.tasks.create', 'tasks.tasks.edit', 'tasks.projects.view',
+      'tasks.projects.create', 'tasks.projects.edit', 'tasks.time.view', 'tasks.time.log',
       'expenses.claims.view', 'expenses.claims.create', 'expenses.claims.edit',
       'learning.courses.view', 'discuss.channels.view', 'discuss.messages.send', 'meetings.calendar.view'],
     denies: ['billing.*.*', 'core.*.*', 'catalog.*.*'],
