@@ -235,7 +235,8 @@ export async function intakeLeads(db, {
       custom: p.lead.custom,
       stage_id: p.lead.stage_id ?? defaultStage?.id ?? null,
       source_id: origin.sourceId ?? null,
-      source_detail: origin.detail ? String(origin.detail).slice(0, 160) : null,
+      // A Meta Page has several forms: each lead names its own.
+      source_detail: (origin.detailFor?.(p.raw) ?? origin.detail)?.toString().slice(0, 160) || null,
       ext_key: p.extKey,
     };
   });

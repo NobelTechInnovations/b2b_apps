@@ -11,6 +11,10 @@ export const config = defineConfig({
   serviceToken: env('string', { required: true, secret: true }),
   // Who holds a permission is tenancy's to answer.
   tenancyUrl: env('string', { default: 'http://localhost:4002' }),
+  // Email addresses for notifications that are also emailed, and the web app
+  // their buttons open.
+  identityUrl: env('string', { default: 'http://localhost:4001' }),
+  appUrl: env('string', { default: 'http://localhost:3000' }),
   // Either one URL — smtps://user:password@smtp.example.com:465 — or the
   // separate SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS most providers
   // (ZeptoMail, Brevo, SES) hand out. Neither set means "log, don't send".

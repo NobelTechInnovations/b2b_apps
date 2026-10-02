@@ -106,6 +106,9 @@ export async function inspectMetaPage(pageId, token) {
 }
 
 /** Meta's answer list → one flat record, ready for field matching. */
+/** "Meta · Diwali offer": the lead form's name, so each form's leads stay together. */
+export const metaFormDetail = (raw) => (raw?.__form ? `Meta · ${raw.__form}` : null);
+
 export function flattenMetaLead(lead, formName) {
   const record = {};
   for (const answer of lead.field_data ?? []) {
@@ -198,10 +201,10 @@ export async function syncSource(db, source, { serviceToken, actorId = null }) {
     const pulled = await fetchMetaLeads(source, token);
     cursor = pulled.cursor;
     // `__` keys travel with the row for its source id but are never mapped.
-    rows = pulled.records.map(({ lead, form }) => ({ ...flattenMetaLead(lead, form.name), __meta_id: lead.id }));
+    rows = pulled.records.map(({ lead, form }) => ({ ...flattenMetaLead(lead, form.name), __meta_id: lead.id, __form: form.name }));
     origin = {
       leadSource: 'meta', sourceId: source.id, detail: `Meta · ${source.config.page_name ?? source.name}`,
-      extKey: (raw) => `meta:${raw.__meta_id}`,
+      detailFor: metaFormDetail, extKey: (raw) => `meta:${raw.__meta_id}`,
     };
   } else {
     throw badRequest('Webhook sources receive leads; there is nothing to pull.');

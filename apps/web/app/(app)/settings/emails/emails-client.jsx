@@ -21,7 +21,7 @@ const STATUS = {
 };
 const TEMPLATE = {
   invitation: 'Invitation', verify_email: 'Confirm email', reset_password: 'Password reset', magic_link: 'Sign-in link',
-  quote: 'Quotation', campaign: 'Campaign', sign_request: 'Signature request', booking_confirmation: 'Booking', partner_portal: 'Partner portal', test: 'Test email',
+  quote: 'Quotation', campaign: 'Campaign', sign_request: 'Signature request', booking_confirmation: 'Booking', partner_portal: 'Partner portal', notification: 'Notification', test: 'Test email',
 };
 
 export default function EmailsClient() {

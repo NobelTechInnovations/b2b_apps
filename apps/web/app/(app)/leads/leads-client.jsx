@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Plus, Upload, Users, Phone, MessageCircle, Tag, Trash2, BellRing, Sparkles, ChevronRight } from 'lucide-react';
+import { Plus, Upload, Users, Phone, MessageCircle, Tag, Trash2, BellRing, Sparkles, ChevronRight, Kanban, List } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { relativeTime } from '@/lib/format';
@@ -17,8 +17,9 @@ import { ListToolbar, Pagination } from '@/components/data/list-shell';
 import { Table, THead, TBody, TH, TR, TD, TableSkeleton } from '@/components/ui/table';
 import { Avatar, Badge, Card, EmptyState, PageHeader, Alert, Skeleton } from '@/components/ui/primitives';
 import {
-  Chip, OUTCOME_LABEL, OUTCOME_TONE, SOURCE_LABEL, StageBadge, TZ, customValue, dueLabel, telLink, useLeadsMeta, whatsappLink,
+  Chip, OUTCOME_LABEL, OUTCOME_TONE, SOURCE_LABEL, StageBadge, TZ, customValue, dueLabel, formName, telLink, useLeadsMeta, whatsappLink,
 } from '@/components/leads/lead-kit';
+import { BOARD_BY, LeadBoard } from '@/components/leads/lead-board';
 import { LeadDrawer } from '@/components/leads/lead-drawer';
 import { LeadFormModal } from '@/components/leads/lead-form';
 
@@ -34,9 +35,18 @@ const VIEWS = [
 ];
 
 const GROUP_BY = [
-  ['', 'No grouping'], ['stage', 'Stage'], ['owner', 'Owner'], ['followup', 'Follow-up'], ['outcome', 'Last call'],
-  ['source', 'Source'], ['city', 'City'], ['tag', 'Tag'],
+  ['', 'No grouping'], ['form', 'Form / source'], ['stage', 'Stage'], ['owner', 'Owner'], ['followup', 'Follow-up'],
+  ['outcome', 'Last call'], ['source', 'Source type'], ['city', 'City'], ['tag', 'Tag'],
 ];
+// Remembered choices are checked: an old or edited value must not break the page.
+const remembered = (key, allowed, fallback) => {
+  try {
+    const value = localStorage.getItem(key);
+    return allowed.includes(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+};
 
 export default function LeadsClient() {
   const router = useRouter();
@@ -50,6 +60,9 @@ export default function LeadsClient() {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('recent');
   const [groupBy, setGroupBy] = useState('');
+  // List, or a board with one column per form / source (or stage, owner…).
+  const [layout, setLayout] = useState('list');
+  const [boardBy, setBoardBy] = useState('form');
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState([]);
   const [info, setInfo] = useState(null);
@@ -72,12 +85,23 @@ export default function LeadsClient() {
     if (params.get('view') && VIEWS.some((v) => v.key === params.get('view'))) setView(params.get('view'));
   }, [params]);
   useEffect(() => {
-    try { setGroupBy(localStorage.getItem('nexus-leads-group') ?? ''); } catch { /* private mode */ }
+    setGroupBy(remembered('nexus-leads-group', GROUP_BY.map(([value]) => value), ''));
+    setLayout(remembered('nexus-leads-layout', ['list', 'board'], 'list'));
+    setBoardBy(remembered('nexus-leads-board', BOARD_BY.map(([value]) => value), 'form'));
   }, []);
-  const chooseGroup = (value) => {
-    setGroupBy(value);
-    try { localStorage.setItem('nexus-leads-group', value); } catch { /* private mode */ }
+  const remember = (key, value) => {
+    try { localStorage.setItem(key, value); } catch { /* private mode */ }
   };
+  const chooseGroup = (value) => {
+    // The old groups go at once, so the new grouping never draws the old ones.
+    setGroups(null);
+    setGroupBy(value);
+    remember('nexus-leads-group', value);
+  };
+  const chooseLayout = (value) => { setLayout(value); setSelected(new Set()); remember('nexus-leads-layout', value); };
+  const chooseBoardBy = (value) => { setBoardBy(value); remember('nexus-leads-board', value); };
+  const board = layout === 'board';
+  const grouped = !board && Boolean(groupBy);
 
   const baseQuery = useMemo(() => ({
     ...(VIEWS.find((v) => v.key === view)?.query ?? {}), ...filters, q: search || undefined, view: sort, tz: TZ,
@@ -87,11 +111,16 @@ export default function LeadsClient() {
     setLoading(true);
     setError(null);
     try {
-      // The counts on the quick views come with the list; grouped, fetch one row for them.
-      const list = await api.get('/leads/leads', { query: { ...baseQuery, page: groupBy ? 1 : page, limit: groupBy ? 1 : 50 } });
+      // The counts on the quick views come with the list; grouped or on the
+      // board (which loads its own columns), fetch one row for them.
+      const compact = grouped || board;
+      const list = await api.get('/leads/leads', { query: { ...baseQuery, page: compact ? 1 : page, limit: compact ? 1 : 50 } });
       setInfo(list.meta);
-      if (groupBy) {
-        setGroups((await api.get('/leads/groups', { query: { ...baseQuery, by: groupBy } })).data);
+      if (board) {
+        setGroups(null);
+        setRows([]);
+      } else if (grouped) {
+        setGroups((await api.get('/leads/groups', { query: { ...baseQuery, by: groupBy } })).data ?? []);
         setRows([]);
       } else {
         setGroups(null);
@@ -104,7 +133,7 @@ export default function LeadsClient() {
     } finally {
       setLoading(false);
     }
-  }, [baseQuery, groupBy, page]);
+  }, [baseQuery, grouped, board, groupBy, page]);
 
   useEffect(() => {
     const timer = setTimeout(load, search ? 300 : 0);
@@ -125,16 +154,18 @@ export default function LeadsClient() {
   const toolbarFilters = useMemo(() => {
     if (!meta) return [];
     const list = [
-      { key: 'stage_id', label: 'Stage', options: meta.stages.map((s) => ({ value: s.id, label: s.name })) },
+      { key: 'stage_id', label: 'Stage', options: (meta.stages ?? []).map((s) => ({ value: s.id, label: s.name })) },
     ];
     if (meta.sees_all) {
       list.push({
         key: 'owner', label: 'Owner',
-        options: [{ value: 'me', label: 'Me' }, { value: 'unassigned', label: 'Unassigned' }, ...meta.team.map((m) => ({ value: m.user_id, label: m.name ?? m.email }))],
+        options: [{ value: 'me', label: 'Me' }, { value: 'unassigned', label: 'Unassigned' }, ...(meta.team ?? []).map((m) => ({ value: m.user_id, label: m.name ?? m.email }))],
       });
     }
     list.push(
-      { key: 'source', label: 'Source', options: meta.sources.map((s) => ({ value: s, label: SOURCE_LABEL[s] ?? s })) },
+      // Each form, Meta form, sheet or CSV by name; picking one shows just its leads.
+      { key: 'form', label: 'Form / source', options: (meta.forms ?? []).map((f) => ({ value: f.value, label: `${formName(f)} (${f.count})` })) },
+      { key: 'source', label: 'Source type', options: (meta.sources ?? []).map((s) => ({ value: s, label: SOURCE_LABEL[s] ?? s })) },
       { key: 'outcome', label: 'Last call', options: Object.entries(OUTCOME_LABEL).map(([value, label]) => ({ value, label })) },
       { key: 'created', label: 'Added', options: [{ value: 'today', label: 'Today' }, { value: 'week', label: 'Last 7 days' }, { value: 'month', label: 'Last 30 days' }] },
     );
@@ -167,7 +198,9 @@ export default function LeadsClient() {
   const canAssign = can('leads.leads.assign');
   const teammates = (meta?.team ?? []).filter((m) => canAssign || m.user_id !== user?.id);
   const rowProps = { meta, listed, fieldsByKey, selected, toggle, toggleAll, onOpen: setOpenId };
-  const nothing = groupBy ? groups?.length === 0 : rows.length === 0;
+  // Grouped, nothing is drawn until this grouping's groups arrive (or fail).
+  const waiting = grouped ? !groups && !error : loading && !rows.length;
+  const nothing = grouped ? (groups ?? []).length === 0 : rows.length === 0;
 
   return (
     <div className="space-y-5">
@@ -204,10 +237,30 @@ export default function LeadsClient() {
         onFilter={setFilter}
         onClear={() => { setFilters({}); setPage(1); }}
         actions={
-          <div className="flex gap-2">
-            <Select value={groupBy} onChange={(e) => chooseGroup(e.target.value)} className="w-auto" aria-label="Group by">
-              {GROUP_BY.map(([value, label]) => <option key={value} value={value}>{value ? `Group: ${label}` : label}</option>)}
-            </Select>
+          <div className="flex flex-wrap gap-2">
+            <div className="flex rounded-[var(--radius-md)] border border-[var(--border-default)] p-0.5" role="group" aria-label="Layout">
+              {[['list', 'List', List], ['board', 'Board', Kanban]].map(([value, label, Icon]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => chooseLayout(value)}
+                  aria-pressed={layout === value}
+                  className={cn('flex items-center gap-1.5 rounded-[calc(var(--radius-md)-2px)] px-2.5 py-1 text-sm',
+                    layout === value ? 'bg-[var(--surface-hover)] font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]')}
+                >
+                  <Icon className="size-4" />{label}
+                </button>
+              ))}
+            </div>
+            {board ? (
+              <Select value={boardBy} onChange={(e) => chooseBoardBy(e.target.value)} className="w-auto" aria-label="Board columns">
+                {BOARD_BY.map(([value, label]) => <option key={value} value={value}>{`Columns: ${label}`}</option>)}
+              </Select>
+            ) : (
+              <Select value={groupBy} onChange={(e) => chooseGroup(e.target.value)} className="w-auto" aria-label="Group by">
+                {GROUP_BY.map(([value, label]) => <option key={value} value={value}>{value ? `Group: ${label}` : label}</option>)}
+              </Select>
+            )}
             <Select value={sort} onChange={(e) => setSort(e.target.value)} className="w-auto" aria-label="Sort">
               <option value="recent">Newest first</option>
               <option value="followup">Next follow-up</option>
@@ -245,7 +298,9 @@ export default function LeadsClient() {
 
       {error && <Alert tone="critical">{error}</Alert>}
 
-      {loading && (groupBy ? !groups : !rows.length) ? (
+      {board ? (
+        <LeadBoard by={boardBy} meta={meta} baseQuery={baseQuery} version={version} onOpen={setOpenId} onMoved={load} />
+      ) : waiting ? (
         <TableSkeleton rows={8} columns={6} />
       ) : nothing ? (
         <Card>
@@ -265,9 +320,9 @@ export default function LeadsClient() {
             )}
           />
         </Card>
-      ) : groupBy ? (
+      ) : grouped ? (
         <div className="space-y-2">
-          {groups.map((g) => (
+          {(groups ?? []).map((g) => (
             <LeadGroup key={`${groupBy}:${g.key}:${version}`} group={g} by={groupBy} baseQuery={baseQuery} rowProps={rowProps} />
           ))}
         </div>
@@ -326,7 +381,9 @@ function LeadGroup({ group, by, baseQuery, rowProps }) {
     return () => { live = false; };
   }, [open, page, baseQuery, group.filter]);
 
-  const label = by === 'source' ? SOURCE_LABEL[group.label] ?? group.label : group.label;
+  const label = by === 'source' ? SOURCE_LABEL[group.label] ?? group.label
+    : by === 'form' ? formName({ value: group.key, named: group.label != null, source: group.source })
+      : group.label ?? '—';
   return (
     <Card className="overflow-hidden">
       <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2.5 px-4 py-3 text-left hover:bg-[var(--surface-hover)]" aria-expanded={open}>

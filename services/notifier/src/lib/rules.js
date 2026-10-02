@@ -10,6 +10,9 @@ import { EVENTS } from '@nexus/contracts/events';
  *
  * The person who caused an event is never notified about it. That is enforced
  * once, by the consumer, rather than remembered in every rule here.
+ *
+ * A rule may add `email: (actorName) => ({ subject, heading, lines, button })`
+ * for news people should not miss: the same people are then emailed too.
  */
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -117,6 +120,18 @@ export const RULES = {
     title: `Assigned to you: ${d.title}`,
     body: d.due_date ? `Due ${shortDate(d.due_date)}` : null,
     link: `/tasks?task=${d.task_id}`,
+    email: (actor) => ({
+      subject: `${actor ? `${actor} assigned you` : 'New task'}: ${d.title}`,
+      heading: 'A task was assigned to you',
+      lines: [
+        `“${d.title}”`,
+        [d.board_name && `Board: ${d.board_name}`, d.due_date && `Due: ${shortDate(d.due_date)}`,
+          (d.priority === 'high' || d.priority === 'urgent') && `Priority: ${d.priority}`].filter(Boolean).join(' · '),
+        d.description,
+        actor && `Assigned by ${actor}.`,
+      ],
+      button: 'Open the task',
+    }),
   }] : []),
 
   [EVENTS.BOARD_MEMBER_ADDED]: (d) => (d.user_id ? [{

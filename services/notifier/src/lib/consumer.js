@@ -7,7 +7,7 @@ import { RULES } from './rules.js';
  * Delivery is at-least-once, so a unique index on (event_id, user_id) makes
  * every insert idempotent: a redelivered event notifies nobody twice.
  */
-export async function registerConsumer({ bus, db, tenancy, logger }) {
+export async function registerConsumer({ bus, db, tenancy, identity = null, sender = null, appUrl = '', logger }) {
   async function recipients(orgId, users) {
     if (Array.isArray(users)) return users;
     if (users?.permission) return tenancy.holders(orgId, users.permission);
@@ -40,7 +40,28 @@ export async function registerConsumer({ bus, db, tenancy, logger }) {
 
       if (audience.length) {
         logger?.debug({ type: event.type, recipients: audience.length }, 'notified');
+        if (message.email && sender && identity) await email(event, message, audience);
       }
+    }
+  }
+
+  /**
+   * The same news by email. Each (event, address) is sent once: a redelivered
+   * event finds it already sent, unless the earlier try is waiting to retry.
+   */
+  async function email(event, message, audience) {
+    const people = await identity.users([...audience, event.actor_id].filter(Boolean));
+    const actor = event.actor_id ? people.get(event.actor_id)?.name ?? null : null;
+    const content = message.email(actor);
+    let link = null;
+    try { link = message.link ? new URL(message.link, appUrl).toString() : null; } catch { /* no APP_URL: send without a button */ }
+    for (const userId of audience) {
+      const to = people.get(userId)?.email;
+      if (!to) continue;
+      await sender.send({
+        eventId: event.id, to, template: 'notification', orgId: event.org_id, occurredAt: event.occurred_at,
+        data: { ...content, link },
+      });
     }
   }
 
@@ -49,6 +70,24 @@ export async function registerConsumer({ bus, db, tenancy, logger }) {
   const subscriptions = [];
   for (const type of Object.keys(RULES)) subscriptions.push(await bus.subscribe('notifier', type, handle));
   return subscriptions;
+}
+
+/** Identity knows people's names and email addresses. */
+export function createIdentityClient({ baseUrl, serviceToken }) {
+  return {
+    async users(ids) {
+      if (!ids.length) return new Map();
+      const response = await fetch(new URL('/internal/users/lookup', baseUrl), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-nexus-service-token': serviceToken },
+        body: JSON.stringify({ ids: [...new Set(ids)] }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      // Throwing redelivers the event; the in-app notice is already saved and is not repeated.
+      if (!response.ok) throw new Error(`identity responded ${response.status}`);
+      return new Map(((await response.json()).data ?? []).map((user) => [user.id, user]));
+    },
+  };
 }
 
 /** Tenancy answers "who can do X here", cached briefly per workspace. */

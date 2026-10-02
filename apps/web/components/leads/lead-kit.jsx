@@ -56,6 +56,12 @@ export const SOURCE_LABEL = {
   google_sheet: 'Google Sheet', survey: 'Survey form', webhook: 'Webhook', whatsapp: 'WhatsApp', walk_in: 'Walk-in',
 };
 
+/**
+ * Where a lead came from, by name: "Form · Site visit", "Meta · Diwali offer",
+ * "CSV · Expo list" — or the kind ("Added by hand") when it has no name.
+ */
+export const formName = ({ value, named, source }) => (named ? value : SOURCE_LABEL[source ?? value] ?? value ?? 'Unknown');
+
 /** wa.me wants the full international number; a bare 10-digit number is Indian. */
 export function whatsappLink(phone, text) {
   let digits = String(phone ?? '').replace(/[^0-9]/g, '');

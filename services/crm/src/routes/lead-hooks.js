@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ApiError, notFound } from '@nexus/service-kit';
 import { intakeLeads } from '../lib/lead-intake.js';
-import { fetchMetaLead, flattenMetaLead, intakeOptions, openSecret, settleSource } from '../lib/lead-sources.js';
+import { fetchMetaLead, flattenMetaLead, intakeOptions, metaFormDetail, openSecret, settleSource } from '../lib/lead-sources.js';
 
 const tokenParams = { params: { type: 'object', properties: { token: { type: 'string', pattern: '^[A-Za-z0-9_-]{16,64}$' } }, required: ['token'] } };
 
@@ -124,8 +124,8 @@ export async function leadHookRoutes(app) {
           const lead = await fetchMetaLead(leadId, token);
           const formName = (source.config.forms ?? []).find((f) => f.id === String(lead.form_id ?? formId))?.name ?? null;
           const result = await intakeLeads(db, {
-            orgId: source.org_id, rows: [{ ...flattenMetaLead(lead, formName), __meta_id: lead.id }], ...intakeOptions(source),
-            origin: { leadSource: 'meta', sourceId: source.id, detail: `Meta · ${source.config.page_name ?? source.name}`, extKey: (raw) => `meta:${raw.__meta_id}` },
+            orgId: source.org_id, rows: [{ ...flattenMetaLead(lead, formName), __meta_id: lead.id, __form: formName }], ...intakeOptions(source),
+            origin: { leadSource: 'meta', sourceId: source.id, detail: `Meta · ${source.config.page_name ?? source.name}`, detailFor: metaFormDetail, extKey: (raw) => `meta:${raw.__meta_id}` },
             onDuplicate: 'note',
           });
           await settleSource(db, source, result);

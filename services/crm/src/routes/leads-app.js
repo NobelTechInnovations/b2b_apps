@@ -22,6 +22,9 @@ const FOLLOWUP_KINDS = ['call', 'whatsapp', 'email', 'meeting', 'visit', 'task']
 export const LEAD_SOURCES = ['manual', 'website', 'referral', 'campaign', 'event', 'cold_call', 'import', 'api', 'partner',
   'meta', 'google_sheet', 'survey', 'webhook', 'whatsapp', 'walk_in'];
 const TIMEZONES = new Set([...Intl.supportedValuesOf('timeZone'), 'UTC']);
+// Where a lead came from, as specific as is known: "Form · Site visit",
+// "Meta · Diwali offer", "CSV · Expo list" — else its kind ("manual").
+const FORM_KEY = 'COALESCE(l.source_detail, l.source)';
 const SORTS = {
   recent: 'l.created_at DESC',
   followup: 'l.next_followup_at ASC NULLS LAST, l.created_at DESC',
@@ -189,12 +192,24 @@ export async function leadsAppRoutes(app) {
   // ═══════════════════════════════════════════════════════════ SETUP / META
   app.get('/leads/meta', { preHandler: guard('leads.leads.view') }, async (request) => {
     const { orgId } = request.ctx;
-    const [stages, fields, members] = await Promise.all([ensureStages(db, orgId), activeFields(db, orgId), team(orgId)]);
+    const values = [orgId];
+    const own = scope(request.ctx, values);
+    const [stages, fields, members, forms] = await Promise.all([
+      ensureStages(db, orgId), activeFields(db, orgId), team(orgId),
+      // Each form, sheet, Meta form or CSV the viewer's leads came from.
+      db.rows(
+        `SELECT ${FORM_KEY} AS value, min(l.source) AS source, bool_or(l.source_detail IS NOT NULL) AS named, count(*)::int AS count
+           FROM leads l WHERE l.org_id = $1 AND l.archived_at IS NULL${own ? ` AND ${own}` : ''}
+          GROUP BY 1 ORDER BY count DESC LIMIT 100`,
+        values,
+      ),
+    ]);
     return {
       data: {
         stages, fields, team: members,
         outcomes: Object.entries(OUTCOMES).map(([value, label]) => ({ value, label })),
         sources: LEAD_SOURCES,
+        forms,
         sees_all: seesAll(request.ctx),
       },
     };
@@ -207,6 +222,7 @@ export async function leadsAppRoutes(app) {
     owner: { type: 'string', pattern: '^(me|unassigned|usr_[0-9a-hjkmnp-tv-z]{26})$' },
     source: v.enum(LEAD_SOURCES),
     source_id: v.id('lsrc'),
+    form: v.text(160),
     followup: v.enum(['overdue', 'today', 'upcoming', 'none']),
     outcome: v.enum(Object.keys(OUTCOMES)),
     fresh: v.bool,
@@ -242,6 +258,7 @@ export async function leadsAppRoutes(app) {
     else if (qs.owner) add('l.owner_user_id = ?', qs.owner);
     if (qs.source) add('l.source = ?', qs.source);
     if (qs.source_id) add('l.source_id = ?', qs.source_id);
+    if (qs.form) add(`${FORM_KEY} = ?`, qs.form);
     if (qs.outcome) add('l.last_call_outcome = ?', qs.outcome);
     if (qs.fresh) where.push('l.call_count = 0');
     if (qs.rating) add('l.rating = ?', qs.rating);
@@ -301,7 +318,7 @@ export async function leadsAppRoutes(app) {
    * from each source, per last call result, city, tag or follow-up. Each
    * group's key is the filter that opens just that group.
    */
-  const GROUPS = ['stage', 'owner', 'source', 'outcome', 'followup', 'city', 'tag'];
+  const GROUPS = ['stage', 'owner', 'form', 'source', 'outcome', 'followup', 'city', 'tag'];
   app.get('/leads/groups', {
     preHandler: guard('leads.leads.view'),
     schema: { querystring: query({ ...listQuery, by: v.enum(GROUPS) }) },
@@ -312,6 +329,7 @@ export async function leadsAppRoutes(app) {
       stage: 'COALESCE(l.stage_id, $3)',
       owner: 'l.owner_user_id',
       source: 'l.source',
+      form: FORM_KEY,
       outcome: 'l.last_call_outcome',
       city: `NULLIF(initcap(lower(trim(l.city))), '')`,
       followup: `CASE WHEN l.next_followup_at IS NULL THEN 'none'
@@ -324,7 +342,11 @@ export async function leadsAppRoutes(app) {
           WHERE ${clause} GROUP BY t.tag ORDER BY count DESC, t.tag LIMIT 60`,
         values,
       )
-      : await db.rows(`SELECT ${key} AS key, count(*)::int AS count FROM ${FROM} WHERE ${clause} GROUP BY 1 ORDER BY count DESC LIMIT 60`, values);
+      : await db.rows(
+        `SELECT ${key} AS key, count(*)::int AS count, min(l.source) AS source, bool_or(l.source_detail IS NOT NULL) AS named
+           FROM ${FROM} WHERE ${clause} GROUP BY 1 ORDER BY count DESC LIMIT 60`,
+        values,
+      );
 
     const names = by === 'owner' ? await people.lookup(rows.map((r) => r.key)) : null;
     const FOLLOW = { overdue: 'Overdue', today: 'Today', upcoming: 'Upcoming', none: 'No follow-up booked' };
@@ -338,6 +360,9 @@ export async function leadsAppRoutes(app) {
           return { key: r.key ?? 'unassigned', label: r.key ? names.get(r.key)?.name ?? 'Former member' : 'Unassigned', count: r.count, filter: { owner: r.key ?? 'unassigned' } };
         case 'source':
           return { key: r.key, label: r.key, count: r.count, filter: { source: r.key } };
+        case 'form':
+          // `source` names the kind when there is no form name to show.
+          return { key: r.key, label: r.named ? r.key : null, source: r.source, count: r.count, filter: { form: r.key } };
         case 'outcome':
           return { key: r.key ?? 'none', label: r.key ? OUTCOMES[r.key] : 'Not called yet', count: r.count, filter: r.key ? { outcome: r.key } : { fresh: true } };
         case 'followup':

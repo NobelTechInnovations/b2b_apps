@@ -184,7 +184,12 @@ export async function taskRoutes(app) {
     if (!response.ok) throw badRequest('The linked record is unavailable or you do not have permission to read it.');
     return (await response.json()).data;
   }
-  const emit = (tx, request, type, row) => tx.emit({ type, org_id: request.ctx.orgId, actor_id: request.ctx.userId, data: { task_id: row.id, title: row.title, project_id: row.project_id, assignee_id: row.assignee_id, status: row.status, due_date: row.due_date, created_by: row.created_by, source_app: row.source_app, source_id: row.source_id } });
+  const emit = (tx, request, type, row, extra = {}) => tx.emit({ type, org_id: request.ctx.orgId, actor_id: request.ctx.userId, data: { task_id: row.id, title: row.title, project_id: row.project_id, assignee_id: row.assignee_id, status: row.status, due_date: row.due_date, created_by: row.created_by, source_app: row.source_app, source_id: row.source_id, ...extra } });
+  // The assignee is also emailed, so the event carries what the email says.
+  const emitAssigned = async (tx, request, row) => {
+    const p = row.project_id ? await tx.one('SELECT name FROM projects WHERE org_id=$1 AND id=$2', [request.ctx.orgId, row.project_id]) : null;
+    emit(tx, request, EVENTS.TASK_ASSIGNED, row, { board_name: p?.name ?? null, priority: row.priority, description: (row.description ?? '').trim().slice(0, 500) || null });
+  };
 
   // ═══════════════════════════════════════════════════════════════════ BOARDS
   app.get('/tasks/projects', { preHandler: guard('tasks.projects.view') }, async (r) => {
@@ -498,7 +503,7 @@ export async function taskRoutes(app) {
       [id('tsk'), r.ctx.orgId, b.project_id ?? null, b.parent_id ?? null, b.milestone_id ?? null, b.title.trim(), b.description ?? '', b.status ?? 'todo', b.priority ?? 'medium', b.assignee_id ?? null, b.due_date ?? null, b.source_app ?? null, b.source_type ?? null, b.source_id ?? null, r.ctx.userId, column?.id ?? null]);
       emit(tx, r, EVENTS.TASK_CREATED, created);
       // Creating a task with somebody's name on it is assigning it to them.
-      if (created.assignee_id) emit(tx, r, EVENTS.TASK_ASSIGNED, created);
+      if (created.assignee_id) await emitAssigned(tx, r, created);
       return created;
     });
     return reply.code(201).send({ data: row });
@@ -562,7 +567,7 @@ export async function taskRoutes(app) {
     const row = await tx.one(`UPDATE tasks SET title=$3,description=$4,project_id=$5,milestone_id=$6,status=$7,priority=$8,
       assignee_id=$9,due_date=$10,completed_at=CASE WHEN $7='done' THEN COALESCE(completed_at,now()) ELSE NULL END,column_id=$11,updated_at=now()
       WHERE org_id=$1 AND id=$2 RETURNING *`, [r.ctx.orgId, old.id, next.title.trim(), next.description, next.project_id, next.milestone_id, next.status, next.priority, next.assignee_id, next.due_date, next.column_id ?? null]);
-    if (row.assignee_id && row.assignee_id !== old.assignee_id) emit(tx, r, EVENTS.TASK_ASSIGNED, row);
+    if (row.assignee_id && row.assignee_id !== old.assignee_id) await emitAssigned(tx, r, row);
     if (row.status === 'done' && old.status !== 'done') emit(tx, r, EVENTS.TASK_COMPLETED, row);
     return row;
   }) }));

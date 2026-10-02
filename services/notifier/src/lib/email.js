@@ -84,6 +84,16 @@ const TEMPLATES = {
       footer: 'Nothing to do — this only confirms invitations and password resets can reach people.',
     }),
   }),
+  // An in-app notification, also emailed (rules.js decides which).
+  notification: (d) => ({
+    subject: d.subject,
+    ...layout({
+      heading: d.heading ?? d.subject,
+      lines: (d.lines ?? []).filter(Boolean).map((line) => String(line).slice(0, 600)),
+      button: d.link ? { label: d.button ?? 'Open in Nexus', url: d.link } : undefined,
+      footer: 'You also see this under the bell in Nexus.',
+    }),
+  }),
   partner_portal: (d) => ({
     subject: `Your ${d.company} partner portal`,
     ...layout({ heading: `Welcome to the ${d.company} partner programme`, lines: ['Register deals, track their progress and see your commissions from your own portal. Keep this link private — it is your key.'], button: { label: 'Open the partner portal', url: d.link } }),
