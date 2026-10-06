@@ -14,6 +14,7 @@ export const SERVICES = [
   { name: 'catalog', port: 4003, db: 'catalog', colour: 33 },
   { name: 'billing', port: 4004, db: 'billing', colour: 32 },
   { name: 'audit', port: 4008, db: 'audit', colour: 90 },
+  { name: 'ai', port: 4009, db: 'ai', colour: 35 },
   { name: 'notifier', port: 4006, db: 'notifier', colour: 90 },
   { name: 'gateway', port: 4000, db: null, colour: 34 },
   // Business apps. Ports match the registry order the gateway derives.

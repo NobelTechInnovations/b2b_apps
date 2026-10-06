@@ -74,10 +74,10 @@ export function platformContext(app) {
 
 /** Route guard: `preHandler: requirePermission('crm.leads.create')` */
 export function requirePermission(permission) {
-  return async function (request) {
+  return Object.assign(async function (request) {
     if (!request.ctx) throw unauthorized();
     request.ctx.assert(permission);
-  };
+  }, { nexusPermission: permission });
 }
 
 /** Route guard: the app itself must be entitled + installed. */

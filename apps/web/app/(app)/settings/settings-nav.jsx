@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Building2, Users, Shield, CreditCard, UserCircle, Bell, KeyRound, ScrollText, Mail } from 'lucide-react';
+import { Building2, Users, Shield, CreditCard, UserCircle, Bell, KeyRound, ScrollText, Mail, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useWorkspace } from '@/lib/workspace';
 
@@ -12,6 +12,7 @@ const SECTIONS = [
     items: [
       { href: '/settings/profile', label: 'Your profile', icon: UserCircle },
       { href: '/settings/security', label: 'Security & sessions', icon: KeyRound },
+      { href: '/settings/ai', label: 'AI & agents', icon: Sparkles },
       { href: '/settings/notifications', label: 'Notifications', icon: Bell },
     ],
   },

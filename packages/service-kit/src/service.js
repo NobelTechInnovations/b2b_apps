@@ -9,6 +9,7 @@ import { createLogger } from './logger.js';
 import { errorHandler } from './errors.js';
 import { authPlugin } from './auth.js';
 import { platformContext } from './guards.js';
+import { registerCapabilities } from './capabilities.js';
 
 /**
  * Every Nexus service is created here. Identical middleware, identical error
@@ -93,6 +94,7 @@ export async function createService({
   );
 
   platformContext(app);
+  registerCapabilities(app, name);
 
   app.setErrorHandler(errorHandler);
 

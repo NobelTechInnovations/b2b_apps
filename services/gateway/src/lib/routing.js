@@ -44,6 +44,9 @@ const PLATFORM_ROUTES = [
   { prefix: 'notifications', service: 'notifier' },
   { prefix: 'search',        service: 'search' },
   { prefix: 'audit',         service: 'audit' },
+  { prefix: 'ai',            service: 'ai' },
+  // MCP has its own company/user credential; the AI service verifies it.
+  { prefix: 'mcp',           service: 'ai', public: true },
   // Attendance terminals have no user and no token. They authenticate with a
   // device key the HR service issued, which it verifies itself — the gateway
   // only proves that the request came through it.
@@ -104,6 +107,7 @@ const PLATFORM_PORTS = {
   notifier: 4006,
   search: 4007,
   audit: 4008,
+  ai: 4009,
 };
 
 const APP_PORT_BASE = 4010;

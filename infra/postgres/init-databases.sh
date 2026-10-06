@@ -2,7 +2,7 @@
 # One database per service. Services never share a database.
 set -e
 
-DATABASES="accounting assets audit automation bi billing catalog compliance contracts
+DATABASES="accounting ai assets audit automation bi billing catalog compliance contracts
 crm devices discuss documents ecommerce erp expenses fieldservice files
 helpdesk hr iam identity integrations invoicing knowledge learning mail
 maintenance manufacturing marketing meetings notifier partners payroll

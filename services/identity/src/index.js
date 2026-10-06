@@ -11,6 +11,7 @@ import { createTenancyClient } from './lib/tenancy-client.js';
 import { authRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/account.js';
 import { internalRoutes } from './routes/internal.js';
+import { agentRoutes } from './routes/agents.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NAME = 'identity';
@@ -70,6 +71,7 @@ app.get('/.well-known/openid-configuration', async () => ({
 await app.register(authRoutes);
 await app.register(accountRoutes);
 await app.register(internalRoutes);
+await app.register(agentRoutes);
 
 if (bus) startOutboxRelay({ db, bus, logger: app.log });
 

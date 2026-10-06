@@ -1,0 +1,9 @@
+{
+  "name": "@nexus/ai", "version": "0.1.0", "type": "module", "private": true,
+  "scripts": { "dev": "node --watch src/index.js", "start": "node src/index.js" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@nexus/contracts": "workspace:*", "@nexus/db-kit": "workspace:*", "@nexus/service-kit": "workspace:*",
+    "@fastify/rate-limit": "^10.2.1", "ajv": "^8.17.1", "ajv-formats": "^3.0.1"
+  }
+}

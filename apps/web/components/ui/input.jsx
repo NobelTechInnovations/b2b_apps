@@ -1,8 +1,9 @@
 'use client';
 
 import { forwardRef, useId, useState } from 'react';
-import { Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { Eye, EyeOff, AlertCircle, CircleHelp } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useAiHelp, askAboutField } from '@/lib/ai-help';
 
 const base =
   'w-full bg-[var(--surface-raised)] text-[var(--text-primary)] placeholder:text-[var(--text-disabled)] ' +
@@ -89,6 +90,7 @@ export function Select({ className, children, error, ...props }) {
 /** Label + control + hint/error, with the ids wired up. */
 export function Field({ label, hint, error, required, children, className }) {
   const id = useId();
+  const aiHelp = useAiHelp();
   const child =
     typeof children === 'function'
       ? children({ id, 'aria-describedby': error ? `${id}-error` : hint ? `${id}-hint` : undefined })
@@ -97,10 +99,10 @@ export function Field({ label, hint, error, required, children, className }) {
   return (
     <div className={cn('space-y-1.5', className)}>
       {label && (
-        <label htmlFor={id} className="block text-sm font-medium text-[var(--text-primary)]">
+        <div className="flex items-center gap-1.5"><label htmlFor={id} className="block text-sm font-medium text-[var(--text-primary)]">
           {label}
           {required && <span className="ml-0.5 text-[var(--color-critical-500)]">*</span>}
-        </label>
+        </label>{aiHelp && typeof label === 'string' && <button type="button" aria-label={`Ask AI about ${label}`} title="Explain this field" onClick={() => askAboutField(label, hint)} className="rounded p-0.5 text-[var(--text-disabled)] hover:text-[var(--color-brand-600)]"><CircleHelp className="size-3.5" /></button>}</div>
       )}
       {child}
       {error ? (

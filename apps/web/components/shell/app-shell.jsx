@@ -12,6 +12,8 @@ import { RequestAccessModal } from './request-access';
 import { Sidebar } from './sidebar';
 import { Topbar } from './topbar';
 import { CommandPalette } from './command-palette';
+import { AiHelpContext } from '@/lib/ai-help';
+import { Assistant } from '@/components/ai/assistant';
 
 const COLLAPSE_KEY = 'nexus-sidebar-collapsed';
 
@@ -48,13 +50,14 @@ export function AppShell({ workspace, organizations, children }) {
 
   return (
     <WorkspaceProvider initial={workspace}>
+      <AiHelpContext.Provider value={true}>
       <div className="flex h-screen overflow-hidden bg-[var(--surface-page)]">
         <Sidebar collapsed={collapsed} onToggle={toggle} />
 
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar organizations={organizations} onOpenSearch={() => setPaletteOpen(true)} />
           <main className="flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-[1400px] px-6 py-6 lg:px-8">
+            <div data-tour="workspace-page" className="mx-auto max-w-[1400px] px-6 py-6 lg:px-8">
               <AppAccessGuard workspace={workspace}>{children}</AppAccessGuard>
             </div>
           </main>
@@ -62,6 +65,8 @@ export function AppShell({ workspace, organizations, children }) {
       </div>
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <Assistant />
+      </AiHelpContext.Provider>
     </WorkspaceProvider>
   );
 }

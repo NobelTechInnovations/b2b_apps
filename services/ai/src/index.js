@@ -1,0 +1,11 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createDb, runMigrations } from '@nexus/db-kit';
+import { createService, startService } from '@nexus/service-kit';
+import { config } from './config.js';
+import { aiRoutes } from './routes.js';
+const db = createDb({ url: config.databaseUrl, appName: 'ai' });
+await runMigrations({ db, dir: path.join(path.dirname(fileURLToPath(import.meta.url)), '../migrations') });
+const app = await createService({ name: 'ai', config, db });
+await app.register(aiRoutes);
+await startService(app, { port: config.port, name: 'ai' });

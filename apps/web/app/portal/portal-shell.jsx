@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import {
   LayoutDashboard, Clock, CalendarOff, Receipt, FileText, Target,
-  LogOut, ChevronDown, Sun, Moon, Building2,
+  LogOut, ChevronDown, Sun, Moon, Building2, Sparkles,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useWorkspace } from '@/lib/workspace';
@@ -14,6 +14,8 @@ import { useTheme } from '@/lib/theme';
 import { cn } from '@/lib/cn';
 import { NotificationBell } from '@/components/shell/notification-bell';
 import { apexUrl } from '@/lib/tenant';
+import { AiHelpContext } from '@/lib/ai-help';
+import { Assistant } from '@/components/ai/assistant';
 
 const TABS = [
   { href: '/portal', label: 'Overview', icon: LayoutDashboard, exact: true },
@@ -22,6 +24,7 @@ const TABS = [
   { href: '/portal/payslips', label: 'Payslips', icon: Receipt },
   { href: '/portal/documents', label: 'Documents', icon: FileText },
   { href: '/portal/performance', label: 'Performance', icon: Target },
+  { href: '/portal/ai', label: 'AI & agents', icon: Sparkles },
 ];
 
 export function PortalShell({ user, organizations, children }) {
@@ -38,6 +41,7 @@ export function PortalShell({ user, organizations, children }) {
   }
 
   return (
+    <AiHelpContext.Provider value={true}>
     <div className="min-h-screen bg-[var(--surface-page)]">
       <header className="sticky top-0 z-30 border-b border-[var(--border-subtle)] bg-[var(--surface-raised)]/85 backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-3 px-4 sm:px-6">
@@ -139,6 +143,8 @@ export function PortalShell({ user, organizations, children }) {
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6">{children}</main>
+      <Assistant />
     </div>
+    </AiHelpContext.Provider>
   );
 }
