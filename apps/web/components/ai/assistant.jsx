@@ -69,9 +69,9 @@ function AssistantSession() {
     setMessages(next); setDraft(''); setBusy(true); setError('');
     controller.current = new AbortController();
     try {
-      const { data } = await api.post('/ai/chat', { messages: next.slice(-12).map(({ role, content }) => ({ role, content: content.slice(0, 6000) })), page: pathname, field, use_data: useData }, { signal: controller.current.signal, retry: false });
+      const { data } = await api.post('/ai/chat', { messages: next.slice(-12).map(({ role, content }) => ({ role, content: content.slice(0, 6000) })), page: pathname || undefined, field: field || undefined, use_data: useData }, { signal: controller.current.signal, retry: false });
       setMessages([...next, { role: 'assistant', content: data.reply, proposals: data.proposals, activity: data.activity }]);
-    } catch (e) { if (e.name !== 'AbortError') setError(e.message); }
+    } catch (e) { if (e.name !== 'AbortError') { setError(e.code === 'validation_failed' ? `Please check your question: ${Object.entries(e.fieldErrors).map(([name, message]) => `${name} ${message}`).join('; ') || e.message}` : e.message); setDraft(next.at(-1).content); setMessages(messages); } }
     finally { setBusy(false); }
   }
   async function apply(proposal) {
@@ -93,7 +93,7 @@ function AssistantSession() {
     {open && <section ref={panel} role="dialog" aria-label="Nexus AI assistant"
       className="fixed bottom-20 right-3 z-[70] flex max-h-[80vh] w-[440px] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-raised)] shadow-2xl">
       <div className="bg-[var(--color-brand-700)] px-5 py-4 text-white">
-        <div className="flex items-center justify-between"><div className="flex items-center gap-2"><Sparkles className="size-5" /><h2 className="font-semibold">Nexus assistant</h2></div><button onClick={() => setOpen(false)} aria-label="Close assistant" className="rounded p-1 hover:bg-white/10"><X className="size-4" /></button></div>
+        <div className="flex items-center justify-between"><div className="flex items-center gap-2"><Sparkles className="size-5" /><h2 className="font-semibold text-white">Nexus assistant</h2></div><button onClick={() => setOpen(false)} aria-label="Close assistant" className="rounded p-1 hover:bg-white/10"><X className="size-4" /></button></div>
         <p className="mt-1 text-sm text-white/75">Guidance for your workspace. Help with every step.</p>
       </div>
       <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2">

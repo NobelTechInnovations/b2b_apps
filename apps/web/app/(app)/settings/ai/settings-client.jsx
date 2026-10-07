@@ -13,6 +13,7 @@ export default function AiSettings() {
   const [connections, setConnections] = useState([]);
   const [activity, setActivity] = useState([]);
   const [status, setStatus] = useState(null);
+  const [checking, setChecking] = useState(false);
   const [name, setName] = useState('');
   const [apps, setApps] = useState([]);
   const [write, setWrite] = useState(false);
@@ -35,6 +36,16 @@ export default function AiSettings() {
   async function copy(text, label) {
     try { await navigator.clipboard.writeText(text); setCopied(label); } catch { setError('Copy is unavailable in this browser. Select and copy the text manually.'); }
   }
+  async function checkModel() {
+    setChecking(true); setError('');
+    try {
+      const { data } = await api.post('/ai/check', {}, { retry: false });
+      setStatus((previous) => ({ ...previous, ...data }));
+    } catch (e) {
+      setStatus((previous) => ({ ...previous, verified: false }));
+      setError(e.message);
+    } finally { setChecking(false); }
+  }
   async function create(event) {
     event.preventDefault(); setBusy(true); setError('');
     try {
@@ -51,13 +62,13 @@ export default function AiSettings() {
   return <div className="max-w-4xl space-y-6">
     <div className="overflow-hidden rounded-2xl bg-[var(--color-brand-700)] p-7 text-white">
       <div className="mb-5 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-white/70"><Sparkles className="size-4" /> Intelligence, in your workspace</div>
-      <h2 className="text-2xl font-semibold tracking-tight">Your company. Your AI agents.</h2>
+      <h2 className="text-2xl font-semibold tracking-tight text-white">Your company. Your AI agents.</h2>
       <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/75">Get help in every app and connect agents to your work. Each connection uses one person’s permissions in this company.</p>
       <div className="mt-5 flex flex-wrap gap-3"><Button variant="secondary" icon={Plus} onClick={() => setCreating(true)}>New connection</Button><button className="flex items-center gap-2 text-sm text-white/90" onClick={() => window.dispatchEvent(new Event('nexus:ai-tour'))}><Compass className="size-4" /> Take the setup tour</button></div>
     </div>
     {error && <p role="alert" className="rounded-lg bg-[var(--surface-sunken)] p-3 text-sm">{error}</p>}
     <div className="grid gap-5 md:grid-cols-2">
-      <div className="rounded-xl border border-[var(--border-subtle)] p-5"><div className="flex items-center gap-2 font-semibold"><Sparkles className="size-4 text-[var(--color-brand-600)]" /> In-app assistant</div><p className="mt-2 text-sm text-[var(--text-secondary)]">{status?.configured ? 'Model connected. Open Ask Nexus from any page.' : status?.unavailable ? 'Start the AI service to enable this feature.' : 'Add your model key to enable chat. Field help and tours are ready.'}</p><p className="mt-3 break-all font-mono text-xs text-[var(--text-tertiary)]">{status?.model ?? 'Loading model settings…'}</p>{status && !status.configured && !status.unavailable && <p className="mt-3 text-xs leading-relaxed text-[var(--text-secondary)]">Set <code>AI_API_KEY</code> in the server environment, then restart the local AI service. The key stays on the server.</p>}</div>
+      <div className="rounded-xl border border-[var(--border-subtle)] p-5"><div className="flex items-center gap-2 font-semibold"><Sparkles className="size-4 text-[var(--color-brand-600)]" /> In-app assistant</div><p className="mt-2 text-sm text-[var(--text-secondary)]">{status?.verified ? 'Connection tested successfully. Open Ask Nexus from any page.' : status?.configured ? 'API key configured. Test the connection to verify the provider.' : status?.unavailable ? 'Start the AI service to enable this feature.' : 'Add your model key to enable chat. Field help and tours are ready.'}</p><p className="mt-3 break-all font-mono text-xs text-[var(--text-tertiary)]">{status?.provider ? `${status.provider} · ` : ''}{status?.model ?? 'Loading model settings…'}</p>{status?.configured && <Button className="mt-3" size="sm" loading={checking} onClick={checkModel}>Test connection</Button>}{status && !status.configured && !status.unavailable && <p className="mt-3 text-xs leading-relaxed text-[var(--text-secondary)]">{status.problem ?? 'Set NVIDIA_API_KEY or ANTHROPIC_API_KEY on the server, then restart the AI service. The key stays on the server.'}</p>}</div>
       <div className="rounded-xl border border-[var(--border-subtle)] p-5"><div className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-4 text-[var(--color-brand-600)]" /> Company & user access</div><p className="mt-2 text-sm text-[var(--text-secondary)]">Read-only by default. Choose apps, set an expiry and revoke access at any time. An agent never gains more access than its user.</p><p className="mt-3 break-all text-xs text-[var(--text-tertiary)]">Company: {workspace.organization.id}</p></div>
     </div>
     {creating && <form onSubmit={create} className="space-y-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-raised)] p-5">

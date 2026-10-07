@@ -16,6 +16,7 @@
     "dev:review": "node scripts/dev-review.js",
     "test:ai": "node --test tests/ai.test.js",
     "smoke:ai": "node services/ai/scripts/smoke.js",
+    "mcp:check": "node services/ai/scripts/check-mcp.js",
     "lint": "eslint .",
     "test": "node --test --test-concurrency=1 tests/*.test.js",
     "smoke": "node scripts/smoke.js",

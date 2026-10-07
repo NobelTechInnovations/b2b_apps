@@ -2,9 +2,10 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import rateLimit from '@fastify/rate-limit';
-import { body, validate as v, ApiError, badRequest, forbidden, notFound } from '@nexus/service-kit';
+import { body, validate as v, ApiError, badRequest, forbidden, notFound, mcpRequestAllowed } from '@nexus/service-kit';
 import { TOOLS, createActionEngine } from './lib/actions.js';
 import { runAssistant } from './lib/assistant.js';
+import { complete, resolveProvider } from './lib/provider.js';
 
 export async function aiRoutes(app, options = {}) {
   const { config, db } = app;
@@ -15,20 +16,37 @@ export async function aiRoutes(app, options = {}) {
     const token = request.headers.authorization?.replace(/^Bearer /, '') ?? request.cookies.nx_at;
     return engine.context(token);
   };
-  app.get('/ai/status', { preHandler: app.loadContext }, async () => ({ data: { configured: Boolean(config.aiApiKey), model: config.aiModel, mcp_path: '/api/mcp', authentication: 'company_user_bearer_token' } }));
+  app.get('/ai/status', { preHandler: app.loadContext }, async () => {
+    const { configured, provider, model, problem } = resolveProvider(config);
+    return { data: { configured, provider, model, problem, verified: false, mcp_path: '/api/mcp', authentication: 'company_user_bearer_token' } };
+  });
+  app.post('/ai/check', { preHandler: app.loadContext, config: { rateLimit: { max: 3, timeWindow: '1 minute' } } }, async (_request, reply) => {
+    const { provider, model } = resolveProvider(config);
+    try {
+      await complete({ config, history: [{ role: 'user', content: 'Reply with OK.' }], fetcher: options.modelFetcher ?? fetch });
+      return { data: { provider, model, verified: true } };
+    } catch (error) {
+      return reply.code(error.status ?? 502).send({ error: { code: error.code ?? 'model_unavailable', message: error.expose ? error.message : 'Unable to reach the AI provider.' } });
+    }
+  });
   app.get('/ai/activity', { preHandler: app.loadContext }, async (request) => ({ data: await db.rows(`SELECT id,user_id,connection_id,action_id,source,status,created_at FROM action_log
     WHERE org_id = $1 AND (user_id = $2 OR $3) ORDER BY created_at DESC LIMIT 50`, [request.ctx.orgId, request.ctx.userId, request.ctx.isOwner]) }));
   app.post('/ai/chat', {
     preHandler: app.loadContext, bodyLimit: 70000,
     config: { rateLimit: { max: 12, timeWindow: '1 minute', keyGenerator: (r) => r.auth?.userId ?? r.ip } },
-    schema: { body: body({ messages: { type: 'array', minItems: 1, maxItems: 12, items: body({ role: v.enum(['user', 'assistant']), content: v.text(6000, 1) }, ['role', 'content']) }, page: v.text(200), field: v.text(200), use_data: v.bool }, ['messages']) },
+    schema: { body: body({ messages: { type: 'array', minItems: 1, maxItems: 12, items: body({ role: v.enum(['user', 'assistant']), content: v.text(6000, 1) }, ['role', 'content']) }, page: v.text(200, 0), field: v.text(200, 0), use_data: v.bool }, ['messages']) },
   }, async (request, reply) => {
     const ctx = await session(request);
     const { messages, page = '', field = '', use_data } = request.body;
     if (messages.at(-1).role !== 'user') throw badRequest('End your message with a question or request.');
     reply.header('cache-control', 'no-store');
-    if (!config.aiApiKey) return reply.status(503).send({ error: { code: 'ai_not_configured', message: 'The assistant needs AI_API_KEY in the local server environment. Tours and MCP connections are available now.' } });
-    return { data: await runAssistant({ config, engine, ctx, messages, page, field, useData: use_data }) };
+    try {
+      return { data: await runAssistant({ config, engine, ctx, messages, page, field, useData: use_data, fetcher: options.modelFetcher ?? fetch }) };
+    } catch (error) {
+      // Provider diagnostics are deliberately sanitized; the global 5xx handler
+      // hides their actionable message behind "Something went wrong" otherwise.
+      return reply.code(error.status ?? 500).send({ error: { code: error.code ?? 'model_unavailable', message: error.expose ? error.message : 'The AI request could not be completed.' } });
+    }
   });
   app.post('/ai/proposals/:proposalId/execute', { preHandler: app.loadContext }, async (request) => {
     const ctx = await session(request);
@@ -52,7 +70,7 @@ export async function aiRoutes(app, options = {}) {
     config: { rateLimit: { max: 90, timeWindow: '1 minute' } },
   }, async (request, reply) => {
     const origin = request.headers.origin;
-    if (origin && !config.mcpAllowedOrigins.includes(origin)) throw forbidden('MCP origin is not allowed.');
+    if (!mcpRequestAllowed({ origin })) throw forbidden('MCP origin is not allowed.');
     let ctx;
     try { ctx = await engine.exchange(request.headers.authorization?.replace(/^Bearer /, '')); }
     catch (error) {

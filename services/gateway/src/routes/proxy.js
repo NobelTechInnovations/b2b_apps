@@ -1,4 +1,4 @@
-import { ApiError, forbidden, unauthorized, notFound } from '@nexus/service-kit';
+import { ApiError, forbidden, unauthorized, notFound, mcpRequestAllowed } from '@nexus/service-kit';
 import { appBySlug } from '@nexus/contracts';
 import { memberApps } from '../lib/authz.js';
 
@@ -60,11 +60,7 @@ export async function proxyRoutes(app) {
     // ── public: sign-in, sign-up, price lists ──────────────────────────────
     if (route.public) {
       if (prefix === 'mcp') {
-        const hosts = (process.env.MCP_ALLOWED_HOSTS ?? 'localhost,127.0.0.1,[::1]').split(',').map((s) => s.trim());
-        const origins = (process.env.MCP_ALLOWED_ORIGINS ?? 'http://localhost:3100,http://localhost:3000').split(',').map((s) => s.trim());
-        let hostname;
-        try { hostname = new URL(`http://${request.headers.host}`).hostname; } catch { throw forbidden('Invalid MCP host.'); }
-        if (!hosts.includes(hostname) || (request.headers.origin && !origins.includes(request.headers.origin))) throw forbidden('MCP host or origin is not allowed.');
+        if (!mcpRequestAllowed({ host: request.headers.host, origin: request.headers.origin })) throw forbidden('MCP host or origin is not allowed. Configure APP_URL, ROOT_DOMAIN or MCP_ALLOWED_HOSTS for this deployment.');
         // No session-cookie fallback on the agent endpoint.
         if (!request.headers.authorization?.startsWith('Bearer nx_mcp_')) throw unauthorized('Use a Nexus MCP connection token.');
       }
