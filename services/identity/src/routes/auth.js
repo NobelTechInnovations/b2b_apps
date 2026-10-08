@@ -8,6 +8,8 @@ import {
   createSession, rotateSession, revokeSession, revokeAllSessions, setActiveOrg,
 } from '../lib/sessions.js';
 
+import { consumeCurrentEmailToken } from '../lib/email-tokens.js';
+
 const normalizeEmail = (email) => email.trim().toLowerCase();
 
 const publicUser = (user) => ({
@@ -408,7 +410,7 @@ export async function authRoutes(app) {
       if (!record) throw badRequest('That verification link is invalid or has expired.');
 
       await db.transaction(async (tx) => {
-        await tx.query(`UPDATE email_tokens SET consumed_at = now() WHERE id = $1`, [record.id]);
+        await consumeCurrentEmailToken(tx, record);
         await tx.query(`UPDATE users SET email_verified_at = now() WHERE id = $1`, [record.user_id]);
         tx.emit({
           type: EVENTS.USER_VERIFIED,
@@ -501,7 +503,7 @@ export async function authRoutes(app) {
       const passwordHash = await hashPassword(request.body.password);
 
       await db.transaction(async (tx) => {
-        await tx.query(`UPDATE email_tokens SET consumed_at = now() WHERE id = $1`, [record.id]);
+        await consumeCurrentEmailToken(tx, record);
         await tx.query(
           `UPDATE users SET password_hash = $2, failed_attempts = 0, locked_until = NULL,
                   email_verified_at = COALESCE(email_verified_at, now())

@@ -2,10 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { Mail, X } from 'lucide-react';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, refreshSession } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Field, Input, PasswordInput } from '@/components/ui/input';
 import { Alert } from '@/components/ui/primitives';
+
+async function authenticated(path, options) {
+  try {
+    return await api(path, options);
+  } catch (error) {
+    if (error.status === 401 && await refreshSession()) return api(path, options);
+    throw error;
+  }
+}
 
 export function EmailChangeForm({ currentEmail, userId }) {
   const [email, setEmail] = useState('');
@@ -17,7 +26,7 @@ export function EmailChangeForm({ currentEmail, userId }) {
 
   useEffect(() => {
     let active = true;
-    api.get('/auth/email-change', { query: { user_id: userId } })
+    authenticated('/auth/email-change', { query: { user_id: userId } })
       .then((r) => { if (active) setPending(r.data); })
       .catch((err) => { if (active) setError(err.message); })
       .finally(() => { if (active) setLoading(false); });
@@ -29,9 +38,9 @@ export function EmailChangeForm({ currentEmail, userId }) {
     setBusy(true);
     setError(null);
     try {
-      const result = await api.post('/auth/change-email', {
+      const result = await authenticated('/auth/change-email', { method: 'POST', body: {
         email: email.trim(), current_password: password, ...(userId ? { user_id: userId } : {}),
-      });
+      } });
       setPending(result.data);
       setEmail('');
       setPassword('');
@@ -46,7 +55,7 @@ export function EmailChangeForm({ currentEmail, userId }) {
     setBusy(true);
     setError(null);
     try {
-      await api.post('/auth/cancel-email-change', userId ? { user_id: userId } : {});
+      await authenticated('/auth/cancel-email-change', { method: 'POST', body: userId ? { user_id: userId } : {} });
       setPending(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not cancel the email change.');

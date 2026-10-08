@@ -14,6 +14,10 @@ function notify(tx, template, to, payload) {
 export async function emailChangeRoutes(app) {
   const { db, tenancy, config } = app;
 
+  app.addHook('onSend', async (_request, reply) => {
+    reply.header('cache-control', 'no-store');
+  });
+
   async function authorize(actorId, userId, orgId) {
     if (actorId !== userId) {
       if (!orgId) throw forbidden('Select a workspace before changing a member\'s email.');
@@ -35,7 +39,7 @@ export async function emailChangeRoutes(app) {
 
   app.post('/auth/change-email', {
     preHandler: app.authenticate,
-    config: { rateLimit: { max: 5, timeWindow: '15 minutes', keyGenerator: (req) => req.auth?.userId ?? req.ip } },
+    config: { rateLimit: { max: 5, timeWindow: '15 minutes' } },
     schema: { body: body({ email: v.email, current_password: v.text(200, 1), user_id: v.id('usr') }, ['email', 'current_password']) },
   }, async (request) => {
     const actorId = request.auth.userId;
@@ -48,7 +52,12 @@ export async function emailChangeRoutes(app) {
     }
     const token = generateToken();
     const result = await db.transaction(async (tx) => {
-      const user = await tx.one(`SELECT * FROM users WHERE id = $1 AND status = 'active' FOR UPDATE`, [userId]);
+      const people = await tx.rows(`SELECT * FROM users WHERE id = ANY($1) AND status = 'active' ORDER BY id FOR UPDATE`, [[actorId, userId]]);
+      const currentActor = people.find((p) => p.id === actorId);
+      if (!currentActor || currentActor.password_hash !== actor.password_hash) {
+        throw badRequest('Your account credentials changed. Please try again.');
+      }
+      const user = people.find((p) => p.id === userId);
       if (!user) throw notFound('User');
       if (email === user.email_normalized) throw badRequest('Enter a different email address.');
       if (await tx.one(`SELECT id FROM users WHERE email_normalized = $1 AND status <> 'deleted'`, [email])) {
@@ -93,11 +102,12 @@ export async function emailChangeRoutes(app) {
     await authorize(pending.actor_id, pending.user_id, pending.org_id);
     const result = await db.transaction(async (tx) => {
       // Always lock user before request: requests, cancellation and confirmation serialize together.
-      const user = await tx.one(`SELECT * FROM users WHERE id = $1 AND status = 'active' FOR UPDATE`, [pending.user_id]);
+      const people = await tx.rows(`SELECT * FROM users WHERE id = ANY($1) AND status = 'active' ORDER BY id FOR UPDATE`, [[pending.actor_id, pending.user_id]]);
+      const user = people.find((p) => p.id === pending.user_id);
       const change = await tx.one(
         `SELECT * FROM email_change_requests WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now() FOR UPDATE`, [hash],
       );
-      if (!user || !change || user.email_normalized !== change.old_email) throw invalidLink();
+      if (!user || !people.some((p) => p.id === pending.actor_id) || !change || user.email_normalized !== change.old_email) throw invalidLink();
       if (await tx.one(`SELECT id FROM users WHERE email_normalized = $1 AND status <> 'deleted'`, [change.new_email])) {
         throw conflict('That email address is already used by an account. Request a different address.');
       }

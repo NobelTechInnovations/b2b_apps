@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Save, BadgeCheck, MailWarning } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useToast } from '@/components/ui/toast';
-import { Card, CardHeader, CardBody, CardFooter, PageHeader, Avatar, Alert, Badge } from '@/components/ui/primitives';
+import { Card, CardHeader, CardBody, CardFooter, PageHeader, Avatar, Alert } from '@/components/ui/primitives';
 import { Button } from '@/components/ui/button';
 import { Input, Field, Select, PasswordInput } from '@/components/ui/input';
 import { EmailChangeForm } from '@/components/account/email-change-form';

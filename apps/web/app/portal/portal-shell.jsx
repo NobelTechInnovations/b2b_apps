@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import {
   LayoutDashboard, Clock, CalendarOff, Receipt, FileText, Target,
-  LogOut, ChevronDown, Sun, Moon, Building2, Sparkles,
+  LogOut, ChevronDown, Sun, Moon, Building2, Sparkles, User,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useWorkspace } from '@/lib/workspace';
@@ -93,6 +93,10 @@ export function PortalShell({ user, organizations, children }) {
                     <p className="truncate text-xs text-[var(--text-tertiary)]">{user?.email}</p>
                   </div>
                   {/* Somebody who also works here gets a way back to the app. */}
+                  <Link href="/portal/profile" onClick={() => setMenuOpen(false)} className="flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-[var(--surface-hover)]">
+                    <User className="size-4 text-[var(--text-tertiary)]" />
+                    Your profile
+                  </Link>
                   {!portalOnly && (
                     <Link
                       href="/dashboard"
