@@ -15,6 +15,7 @@ import { Table, THead, TBody, TH, TR, TD } from '@/components/ui/table';
 import { Avatar, Badge, PageHeader, EmptyState, Card, Alert } from '@/components/ui/primitives';
 import { Icon } from '@/components/shell/icon';
 import { tintFor } from '@/lib/app-theme';
+import { EmailChangeForm } from '@/components/account/email-change-form';
 
 /** Owners and admins are never limited to some apps. */
 const unlimited = (roles) => roles.some((r) => r.slug === 'owner' || r.slug === 'admin');
@@ -32,6 +33,8 @@ export default function MembersClient({ initialMembers, initialInvitations, role
   const [appsFor, setAppsFor] = useState(null);
   const [rolesFor, setRolesFor] = useState(null);
   const [extrasFor, setExtrasFor] = useState(null);
+  const [emailFor, setEmailFor] = useState(null);
+  const canChangeEmails = workspace?.member?.is_owner || workspace?.member?.roles?.includes('admin');
 
   // The apps this workspace has switched on — the ones there is anything to share.
   const workspaceApps = (workspace?.workspace_apps ?? [])
@@ -189,6 +192,9 @@ export default function MembersClient({ initialMembers, initialInvitations, role
                             <MenuItem icon={KeyRound} onClick={() => setExtrasFor(member)}>Extra abilities</MenuItem>
                           </Can>
                           <MenuDivider />
+                          {canChangeEmails && member.status === 'active' && !member.roles.some((r) => r.slug === 'owner') && (
+                            <MenuItem icon={Mail} onClick={() => setEmailFor(member)}>Change sign-in email</MenuItem>
+                          )}
                           <MenuItem icon={Trash2} danger onClick={() => setRemoving(member)}>
                             Remove from workspace
                           </MenuItem>
@@ -239,6 +245,10 @@ export default function MembersClient({ initialMembers, initialInvitations, role
       />
 
       <ExtrasModal member={extrasFor} apps={workspaceApps} onClose={() => setExtrasFor(null)} />
+
+      <Modal open={Boolean(emailFor)} onClose={() => setEmailFor(null)} title="Change sign-in email">
+        {emailFor && <EmailChangeForm key={emailFor.id} userId={emailFor.user_id} currentEmail={emailFor.email} />}
+      </Modal>
 
       <RolesModal
         member={rolesFor}

@@ -6,6 +6,7 @@ import { assertSeatAvailable } from '../lib/seats.js';
 import { workspaceUrl } from '../lib/addresses.js';
 import { resolveMemberPermissions } from '../lib/permissions.js';
 import { acceptInvitation } from './invitations.js';
+import { assertEmailChangeAccess } from '../lib/email-access.js';
 
 const hashToken = (raw) => createHash('sha256').update(raw).digest('hex');
 
@@ -15,6 +16,13 @@ const hashToken = (raw) => createHash('sha256').update(raw).digest('hex');
  */
 export async function internalRoutes(app) {
   const { db } = app;
+
+  app.post('/internal/email-change/authorize', { preHandler: requireInternal() }, async (request) => {
+    const { actor_id: actorId, user_id: userId, org_id: orgId } = request.body ?? {};
+    if (!actorId || !userId || !orgId) throw badRequest('Actor, user and workspace are required.');
+    await assertEmailChangeAccess(db, { actorId, userId, orgId });
+    return { data: { allowed: true } };
+  });
 
   app.get('/internal/users/:userId/memberships', { preHandler: requireInternal() }, async (request) => {
     const rows = await db.rows(

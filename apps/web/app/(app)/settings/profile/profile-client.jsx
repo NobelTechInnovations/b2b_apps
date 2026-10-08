@@ -7,6 +7,7 @@ import { useToast } from '@/components/ui/toast';
 import { Card, CardHeader, CardBody, CardFooter, PageHeader, Avatar, Alert, Badge } from '@/components/ui/primitives';
 import { Button } from '@/components/ui/button';
 import { Input, Field, Select, PasswordInput } from '@/components/ui/input';
+import { EmailChangeForm } from '@/components/account/email-change-form';
 
 const TIMEZONES = [
   'Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Europe/London',
@@ -100,7 +101,7 @@ export default function ProfileClient({ user }) {
               {(props) => <Input {...props} value={form.name} onChange={set('name')} required />}
             </Field>
 
-            <Field label="Email address" hint="Changing your email is not available yet.">
+            <Field label="Email address">
               {(props) => (
                 <Input
                   {...props}
@@ -133,6 +134,13 @@ export default function ProfileClient({ user }) {
           </CardFooter>
         </Card>
       </form>
+
+      <Card>
+        <CardHeader title="Change sign-in email" />
+        <CardBody>
+          <EmailChangeForm currentEmail={user?.email} />
+        </CardBody>
+      </Card>
 
       <form onSubmit={changePassword}>
         <Card>

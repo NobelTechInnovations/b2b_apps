@@ -27,6 +27,18 @@ function layout({ heading, lines, button, footer }) {
 }
 
 const TEMPLATES = {
+  change_email: (d) => ({
+    subject: 'Confirm your new sign-in email',
+    ...layout({ heading: 'Confirm your new email', lines: [`Hi ${d.name ?? 'there'}, confirm this address to update your Nexus login.`, 'This link expires in 24 hours. Your password and workspace access stay the same.'], button: { label: 'Confirm new email', url: d.link } }),
+  }),
+  email_change_requested: (d) => ({
+    subject: 'An email change was requested for your account',
+    ...layout({ heading: 'Email change requested', lines: [`${d.by_admin ? 'A workspace administrator' : 'Someone using your account'} requested a change to ${d.new_email}.`, 'Your current email stays active until the new address is confirmed. If this was unexpected, cancel the pending change in your profile and contact your administrator.'] }),
+  }),
+  email_changed: (d) => ({
+    subject: 'Your sign-in email has changed',
+    ...layout({ heading: 'Your email was updated', lines: [`Your Nexus sign-in email is now ${d.new_email}.`, 'Existing sessions have ended. Sign in with your new email and your existing password. If you did not authorize this, contact your administrator.'] }),
+  }),
   invitation: (d) => ({
     subject: `${d.inviter_name ? `${d.inviter_name} invited you` : 'You are invited'} to ${d.org_name ?? 'a workspace'} on Nexus`,
     ...layout({

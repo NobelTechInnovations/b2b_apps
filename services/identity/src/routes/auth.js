@@ -508,6 +508,7 @@ export async function authRoutes(app) {
             WHERE id = $1`,
           [record.user_id, passwordHash],
         );
+        await tx.query(`UPDATE email_change_requests SET consumed_at = now() WHERE (user_id = $1 OR actor_id = $1) AND consumed_at IS NULL`, [record.user_id]);
         tx.emit({
           type: EVENTS.USER_PASSWORD_CHANGED,
           actor_id: record.user_id,
@@ -551,6 +552,7 @@ export async function authRoutes(app) {
           user.id,
           await hashPassword(request.body.new_password),
         ]);
+        await tx.query(`UPDATE email_change_requests SET consumed_at = now() WHERE (user_id = $1 OR actor_id = $1) AND consumed_at IS NULL`, [user.id]);
         tx.emit({
           type: EVENTS.USER_PASSWORD_CHANGED,
           actor_id: user.id,

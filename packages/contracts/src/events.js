@@ -10,6 +10,7 @@ export const EVENTS = {
   USER_VERIFIED: 'identity.user.verified',
   USER_LOGGED_IN: 'identity.user.logged_in',
   USER_PASSWORD_CHANGED: 'identity.user.password_changed',
+  USER_EMAIL_CHANGED: 'identity.user.email_changed',
   SESSION_REVOKED: 'identity.session.revoked',
 
   // ── tenancy ─────────────────────────────────────────────────────────────

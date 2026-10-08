@@ -12,6 +12,7 @@ import { authRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/account.js';
 import { internalRoutes } from './routes/internal.js';
 import { agentRoutes } from './routes/agents.js';
+import { emailChangeRoutes } from './routes/email-change.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NAME = 'identity';
@@ -70,6 +71,7 @@ app.get('/.well-known/openid-configuration', async () => ({
 
 await app.register(authRoutes);
 await app.register(accountRoutes);
+await app.register(emailChangeRoutes);
 await app.register(internalRoutes);
 await app.register(agentRoutes);
 

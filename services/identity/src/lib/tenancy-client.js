@@ -35,6 +35,13 @@ export function createTenancyClient({ baseUrl, serviceToken, logger, timeoutMs =
   }
 
   return {
+    async authorizeEmailChange({ actorId, userId, orgId }) {
+      const res = await call('/internal/email-change/authorize', {
+        method: 'POST', body: JSON.stringify({ actor_id: actorId, user_id: userId, org_id: orgId }),
+      });
+      if (!res?.data?.allowed) throw new Error('Email change authorization failed.');
+    },
+
     /** All orgs this user is an active member of. */
     async memberships(userId) {
       try {
