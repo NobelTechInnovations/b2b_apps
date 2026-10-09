@@ -60,6 +60,8 @@ export default function TasksClient({ view = 'work' }) {
   const [invitee, setInvitee] = useState({ user_id: '', role: 'editor' });
   const [quickAdd, setQuickAdd] = useState({});
   const [columns, setColumns] = useState([]);
+  // The columns of the board chosen in the task form, so a task can be put in "Pending".
+  const [draftColumns, setDraftColumns] = useState([]);
   const [columnDraft, setColumnDraft] = useState(null); // { id?, name, status, move_to? }
   const active = workspace?.installed?.includes('tasks') && workspace?.apps?.includes('tasks');
   const required = view === 'projects' ? 'tasks.projects.view' : view === 'time' ? 'tasks.time.view' : 'tasks.tasks.view';
@@ -135,6 +137,13 @@ export default function TasksClient({ view = 'work' }) {
   }, [view, projectId]);
   useEffect(() => { loadColumns(); }, [loadColumns]);
   useEffect(() => {
+    setDraftColumns([]);
+    if (!draft?.project_id) return;
+    let live = true;
+    api.get(`/tasks/projects/${draft.project_id}/columns`).then(r => { if (live) setDraftColumns(r.data ?? []); }).catch(() => {});
+    return () => { live = false; };
+  }, [draft?.project_id]);
+  useEffect(() => {
     setMilestones([]);
     if (draft?.project_id && can('tasks.projects.view')) api.get(`/tasks/projects/${draft.project_id}/milestones`).then(r => setMilestones(r.data)).catch(e => setError(e.message));
   }, [draft?.project_id, can]);
@@ -165,7 +174,7 @@ export default function TasksClient({ view = 'work' }) {
       for (const key of ['title', 'description', 'status', 'priority']) data[key] = draft[key];
       for (const key of ['project_id', 'milestone_id', 'assignee_id', 'due_date']) data[key] = draft[key] || null;
       // Its column on the board; the server keeps it unless the status was changed here.
-      if (draft.column_id && data.project_id) data.column_id = draft.column_id;
+      if (draft.column_id && data.project_id && draftColumns.some(c => c.id === draft.column_id)) data.column_id = draft.column_id;
       if (!draft.id && draft.source_app) for (const key of ['source_app', 'source_type', 'source_id']) data[key] = draft[key];
       if (draft.id) await api.patch(`/tasks/${draft.id}`, data); else await api.post('/tasks', data);
       setDraft(null); setDetail(null);
@@ -330,9 +339,12 @@ export default function TasksClient({ view = 'work' }) {
       {draft && <form onSubmit={saveTask} className={styles.editorForm}>{error && <Alert tone="critical">{error}</Alert>}
         <Label title="Title"><Input required data-autofocus placeholder="What needs to get done?" maxLength={200} value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} /></Label>
         <Label title="Description"><Textarea rows={4} placeholder="Add context, a checklist or a useful detail…" value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} /></Label>
-        <Label title="Board"><Select value={draft.project_id ?? ''} onChange={e => setDraft({ ...draft, project_id: e.target.value, milestone_id: '' })}><option value="">No board — a personal to-do</option>{projects.filter(p => (p.can_edit && p.status === 'active') || p.id === draft.project_id).map(p => <option key={p.id} value={p.id}>{p.name}{p.visibility === 'private' ? ' (private)' : ''}</option>)}</Select></Label>
+        <Label title="Board"><Select value={draft.project_id ?? ''} onChange={e => setDraft({ ...draft, project_id: e.target.value, milestone_id: '', column_id: null })}><option value="">No board — a personal to-do</option>{projects.filter(p => (p.can_edit && p.status === 'active') || p.id === draft.project_id).map(p => <option key={p.id} value={p.id}>{p.name}{p.visibility === 'private' ? ' (private)' : ''}</option>)}</Select></Label>
         {milestones.length > 0 && <Label title="Milestone"><Select value={draft.milestone_id ?? ''} onChange={e => setDraft({ ...draft, milestone_id: e.target.value })}><option value="">No milestone</option>{milestones.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}</Select></Label>}
-        <div className="grid grid-cols-2 gap-4"><Label title="Status"><Select value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value })}>{Object.entries(STATUSES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select></Label><Label title="Priority"><Select value={draft.priority} onChange={e => setDraft({ ...draft, priority: e.target.value })}>{PRIORITIES.map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}</Select></Label></div>
+        <div className="grid grid-cols-2 gap-4">{draft.project_id && draftColumns.length
+          // On a board, the stage is one of its columns; the column decides the status.
+          ? <Label title="Stage"><Select value={(draftColumns.find(c => c.id === draft.column_id) ?? draftColumns.find(c => c.status === draft.status) ?? draftColumns[0]).id} onChange={e => { const column = draftColumns.find(c => c.id === e.target.value); setDraft({ ...draft, column_id: column.id, status: column.status }); }}>{draftColumns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Label>
+          : <Label title="Status"><Select value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value, column_id: null })}>{Object.entries(STATUSES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select></Label>}<Label title="Priority"><Select value={draft.priority} onChange={e => setDraft({ ...draft, priority: e.target.value })}>{PRIORITIES.map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}</Select></Label></div>
         <Label title="Assignee"><Select value={draft.assignee_id ?? ''} onChange={e => setDraft({ ...draft, assignee_id: e.target.value })}><option value="">Unassigned</option><option value={user.id}>You</option>{can('tasks.tasks.assign') && assignable.filter(p => p.user_id !== user.id).map(p => <option key={p.user_id} value={p.user_id}>{p.name ?? p.email}</option>)}{draft.assignee_id && draft.assignee_id !== user.id && !assignable.some(p => p.user_id === draft.assignee_id) && <option value={draft.assignee_id}>{personName(draft.assignee_id)}</option>}</Select></Label>
         {projects.find(p => p.id === draft.project_id)?.visibility === 'private' && <p className="-mt-3 text-xs text-[var(--text-tertiary)]">Only people on this private board can be assigned. Share the board to add someone.</p>}
         <Label title="Due date"><Input type="date" value={draft.due_date ?? ''} onChange={e => setDraft({ ...draft, due_date: e.target.value })} /></Label>
