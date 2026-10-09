@@ -796,8 +796,9 @@ export async function leadsAppRoutes(app) {
   });
 
   // ═══════════════════════════════════════════════════════════════ REMINDERS
-  // A follow-up due within ten minutes reminds the person it is assigned to,
-  // once. Ones that were already hours late when this started stay quiet.
+  // A follow-up due within ten minutes reminds the person it is assigned to
+  // and the lead's owner, once. One that was missed (the server was down, or
+  // it was booked in the past) still reminds them at once, up to a week late.
   const timer = setInterval(async () => {
     try {
       const due = await db.rows(
@@ -805,20 +806,25 @@ export async function leadsAppRoutes(app) {
           WHERE a.id IN (
             SELECT id FROM activities
              WHERE completed_at IS NULL AND reminded_at IS NULL AND due_at IS NOT NULL AND related_type = 'lead'
-               AND due_at <= now() + interval '10 minutes' AND due_at > now() - interval '6 hours'
+               AND due_at <= now() + interval '10 minutes' AND due_at > now() - interval '7 days'
              ORDER BY due_at LIMIT 200 FOR UPDATE SKIP LOCKED)
           RETURNING a.id, a.org_id, a.kind, a.body, a.due_at, a.assigned_to, a.related_id`,
       );
       if (!due.length) return;
-      const leads = await db.rows(`SELECT id, first_name, last_name, phone, company_name FROM leads WHERE id = ANY($1)`, [due.map((d) => d.related_id)]);
+      const leads = await db.rows(`SELECT id, first_name, last_name, phone, company_name, owner_user_id FROM leads WHERE id = ANY($1)`, [due.map((d) => d.related_id)]);
       const byId = new Map(leads.map((l) => [l.id, l]));
       for (const f of due) {
         const lead = byId.get(f.related_id);
-        if (!lead || !f.assigned_to) continue;
+        const people = [...new Set([f.assigned_to, lead?.owner_user_id].filter(Boolean))];
+        if (!lead || !people.length) continue;
         await db.transaction(async (tx) => {
           tx.emit({
             type: EVENTS.LEAD_FOLLOWUP_DUE, org_id: f.org_id, actor_id: null,
-            data: { followup_id: f.id, lead_id: lead.id, name: leadName(lead), phone: lead.phone, company_name: lead.company_name, kind: f.kind, note: f.body, due_at: f.due_at, assigned_to: f.assigned_to },
+            data: {
+              followup_id: f.id, lead_id: lead.id, name: leadName(lead), phone: lead.phone, company_name: lead.company_name,
+              kind: f.kind, note: f.body, due_at: f.due_at, assigned_to: f.assigned_to ?? lead.owner_user_id, user_ids: people,
+              overdue: new Date(f.due_at).getTime() < Date.now() - 60_000,
+            },
           });
         });
       }

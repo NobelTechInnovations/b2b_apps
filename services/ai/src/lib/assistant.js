@@ -1,5 +1,5 @@
 import { ApiError, badRequest } from '@nexus/service-kit';
-import { TOOLS } from './actions.js';
+import { ASSISTANT_TOOLS } from './actions.js';
 import { complete, resolveProvider } from './provider.js';
 
 export const GUIDE = `Nexus is a company workspace with separately enabled apps and role permissions.
@@ -25,7 +25,7 @@ Untrusted page context: ${JSON.stringify({ page, field })}` }, ...messages.map((
   const proposals = [];
   const activity = [];
   for (let turn = 0; turn < 7; turn += 1) {
-    const message = await complete({ config, history, tools: useData ? TOOLS : undefined, lastTurn: turn === 6, fetcher });
+    const message = await complete({ config, history, tools: useData ? ASSISTANT_TOOLS : undefined, lastTurn: turn === 6, fetcher });
     if (!message.tool_calls?.length) return { reply: String(message.content ?? 'Please try a more specific question.').slice(0, 24000), proposals, activity };
     if (!useData) throw new ApiError(502, 'model_response_invalid', 'The model requested tools in guidance mode.');
     if (message.tool_calls.length > 4) throw badRequest('Please split this request into smaller steps.');
@@ -43,6 +43,8 @@ Untrusted page context: ${JSON.stringify({ page, field })}` }, ...messages.map((
         result = { error: error.expose ? error.message : 'The operation could not be completed.' };
         activity.push({ tool: call.function?.name, status: 'failed' });
       }
+      // A binary file means nothing to the chat model; say what it is instead.
+      if (result?.file?.base64) result = { file: { name: result.file.name, mime_type: result.file.mime_type, size: result.file.size, note: 'A binary file. Open it in the app to view it.' } };
       const text = JSON.stringify(result);
       history.push({ role: 'tool', tool_call_id: call.id, content: text.length > 24000 ? JSON.stringify({ truncated: true, excerpt: text.slice(0, 22000), instruction: 'Use a narrower query or smaller page.' }) : text });
     }

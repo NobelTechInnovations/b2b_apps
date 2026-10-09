@@ -477,7 +477,10 @@ export async function taskRoutes(app) {
     const clause = clauses.join(' AND '), { page, limit } = r.query;
     const total = await db.one(`SELECT count(*)::int AS n, count(*) FILTER(WHERE status<>'done')::int AS open, count(*) FILTER(WHERE status='in_progress')::int AS in_progress, count(*) FILTER(WHERE status='done')::int AS done, count(*) FILTER(WHERE status<>'done' AND due_date<current_date)::int AS overdue FROM tasks t WHERE ${clause}`, values);
     values.push(limit, (page - 1) * limit);
-    return { data: await db.rows(`SELECT t.*,p.name AS project_name,p.color AS project_color FROM tasks t LEFT JOIN projects p ON p.org_id=t.org_id AND p.id=t.project_id
+    return { data: await db.rows(`SELECT t.*,p.name AS project_name,p.color AS project_color,c.name AS column_name,
+      (SELECT count(*) FROM attachments a WHERE a.org_id=t.org_id AND a.task_id=t.id)::int AS attachment_count,
+      (SELECT count(*) FROM attachments a WHERE a.org_id=t.org_id AND a.task_id=t.id AND a.name ~* '\\.(png|jpe?g|gif|webp|heic|heif|svg|bmp|avif)$')::int AS image_count
+      FROM tasks t LEFT JOIN projects p ON p.org_id=t.org_id AND p.id=t.project_id LEFT JOIN board_columns c ON c.org_id=t.org_id AND c.id=t.column_id
       WHERE ${clause} ORDER BY t.due_date NULLS LAST,t.created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values), meta: { total: total.n, page, limit, stats: total } };
   });
   app.post('/tasks', { preHandler: guard('tasks.tasks.create'), schema: { body: body({ ...taskFields, parent_id: v.id('tsk'), source_app: v.enum(['crm', 'hr', 'helpdesk', 'recruitment']), source_type: v.enum(['lead', 'deal', 'employee', 'ticket', 'candidate']), source_id: v.text(40) }, ['title']) } }, async (r, reply) => {
@@ -565,7 +568,8 @@ export async function taskRoutes(app) {
     }
     await references(tx, r, b, old);
     const row = await tx.one(`UPDATE tasks SET title=$3,description=$4,project_id=$5,milestone_id=$6,status=$7,priority=$8,
-      assignee_id=$9,due_date=$10,completed_at=CASE WHEN $7='done' THEN COALESCE(completed_at,now()) ELSE NULL END,column_id=$11,updated_at=now()
+      assignee_id=$9,due_date=$10,completed_at=CASE WHEN $7='done' THEN COALESCE(completed_at,now()) ELSE NULL END,column_id=$11,updated_at=now(),
+      reminded_at=CASE WHEN due_date IS DISTINCT FROM $10::date OR assignee_id IS DISTINCT FROM $9 THEN NULL ELSE reminded_at END
       WHERE org_id=$1 AND id=$2 RETURNING *`, [r.ctx.orgId, old.id, next.title.trim(), next.description, next.project_id, next.milestone_id, next.status, next.priority, next.assignee_id, next.due_date, next.column_id ?? null]);
     if (row.assignee_id && row.assignee_id !== old.assignee_id) await emitAssigned(tx, r, row);
     if (row.status === 'done' && old.status !== 'done') emit(tx, r, EVENTS.TASK_COMPLETED, row);
@@ -608,4 +612,43 @@ export async function taskRoutes(app) {
     if (!row) throw notFound('Attachment');
     return { data: row };
   });
+
+  // ═══════════════════════════════════════════════════════════════ REMINDERS
+  // Every minute: open tasks due today (from 9 am India time) or overdue by up
+  // to a week remind their assignee — or, unassigned, whoever created them —
+  // once, by notification and email.
+  const timer = setInterval(async () => {
+    try {
+      const due = await db.rows(
+        `UPDATE tasks t SET reminded_at = now()
+          WHERE t.id IN (
+            SELECT id FROM tasks
+             WHERE reminded_at IS NULL AND archived_at IS NULL AND status <> 'done' AND due_date IS NOT NULL
+               AND due_date > (now() AT TIME ZONE 'Asia/Kolkata')::date - 7
+               AND (due_date < (now() AT TIME ZONE 'Asia/Kolkata')::date
+                    OR (due_date = (now() AT TIME ZONE 'Asia/Kolkata')::date AND extract(hour FROM now() AT TIME ZONE 'Asia/Kolkata') >= 9))
+             ORDER BY due_date LIMIT 200 FOR UPDATE SKIP LOCKED)
+          RETURNING t.id, t.org_id, t.title, t.description, t.priority, t.status, t.due_date, t.assignee_id, t.created_by, t.project_id`,
+      );
+      if (!due.length) return;
+      const boards = await db.rows('SELECT id, name FROM projects WHERE id = ANY($1)', [[...new Set(due.map((t) => t.project_id).filter(Boolean))]]);
+      const boardName = new Map(boards.map((b) => [b.id, b.name]));
+      for (const t of due) {
+        await db.transaction(async (tx) => {
+          tx.emit({
+            type: EVENTS.TASK_DUE, org_id: t.org_id, actor_id: null,
+            data: {
+              task_id: t.id, title: t.title, due_date: t.due_date, status: t.status, priority: t.priority,
+              user_id: t.assignee_id ?? t.created_by, board_name: boardName.get(t.project_id) ?? null,
+              description: (t.description ?? '').trim().slice(0, 500) || null,
+            },
+          });
+        });
+      }
+    } catch (error) {
+      app.log.error({ err: error }, 'task reminders failed');
+    }
+  }, 60_000);
+  timer.unref?.();
+  app.addHook('onClose', async () => clearInterval(timer));
 }

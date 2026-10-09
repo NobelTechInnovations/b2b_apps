@@ -40,7 +40,7 @@ export async function registerConsumer({ bus, db, tenancy, identity = null, send
 
       if (audience.length) {
         logger?.debug({ type: event.type, recipients: audience.length }, 'notified');
-        if (message.email && sender && identity) await email(event, message, audience);
+        if (message.email !== false && sender && identity) await email(event, message, audience);
       }
     }
   }
@@ -52,7 +52,10 @@ export async function registerConsumer({ bus, db, tenancy, identity = null, send
   async function email(event, message, audience) {
     const people = await identity.users([...audience, event.actor_id].filter(Boolean));
     const actor = event.actor_id ? people.get(event.actor_id)?.name ?? null : null;
-    const content = message.email(actor);
+    // Without a shaped email, the notice itself is the email.
+    const content = typeof message.email === 'function'
+      ? message.email(actor)
+      : { subject: message.title, heading: message.title, lines: [message.body, actor && `From ${actor}.`] };
     let link = null;
     try { link = message.link ? new URL(message.link, appUrl).toString() : null; } catch { /* no APP_URL: send without a button */ }
     for (const userId of audience) {

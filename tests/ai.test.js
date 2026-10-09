@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createService, requirePermission } from '../packages/service-kit/src/index.js';
-import { createActionEngine, buildActionRequest } from '../services/ai/src/lib/actions.js';
+import { createActionEngine, buildActionRequest, privateAddress } from '../services/ai/src/lib/actions.js';
 import { runAssistant } from '../services/ai/src/lib/assistant.js';
-import { aiRoutes } from '../services/ai/src/routes.js';
+import { aiRoutes, toolContent } from '../services/ai/src/routes.js';
 import { hashAgentToken } from '../services/identity/src/routes/agents.js';
 import { complete, resolveProvider } from '../services/ai/src/lib/provider.js';
 import { mcpRequestAllowed } from '../packages/service-kit/src/mcp-policy.js';
@@ -30,19 +30,27 @@ function fixture() {
     throw new Error(`Unexpected request ${url}`);
   };
   const engine = createActionEngine({ config, db, fetcher, upstreams: { tasks: 'http://tasks.test' } });
-  return { engine, db, requests, logs, proposals, state, connection };
+  return { engine, db, requests, logs, proposals, state, connection, fetcher };
 }
+const fixtureFetch = (f) => f.fetcher;
 
-test('capabilities advertise guarded JSON routes, excluding public and download surfaces', async () => {
+test('capabilities advertise guarded routes and file reads, excluding public, upload and credential surfaces', async () => {
   const app = await createService({ name: 'test', config });
   const guard = [app.loadContext, requirePermission('tasks.tasks.view')];
   app.get('/tasks', { preHandler: guard }, async () => ({}));
   app.post('/tasks/open', async () => ({}));
   app.get('/tasks/export.csv', { preHandler: guard }, async () => '');
+  app.post('/tasks/import', { preHandler: guard }, async () => ({}));
+  app.post('/tasks/upload', { preHandler: guard }, async () => ({}));
   app.get('/tasks/private', { preHandler: guard, config: { ai: false } }, async () => ({}));
+  app.get('/notifications', { preHandler: app.loadContext }, async () => ({}));
+  app.get('/account/agent-connections', { preHandler: app.loadContext }, async () => ({}));
   assert.equal((await app.inject('/internal/ai-capabilities')).statusCode, 403);
   const response = await app.inject({ url: '/internal/ai-capabilities', headers: { 'x-nexus-service-token': config.serviceToken } });
-  assert.deepEqual(response.json().data.map((a) => a.id), ['test:GET:/tasks']);
+  const actions = response.json().data;
+  assert.deepEqual(actions.map((a) => a.id).sort(), ['test:GET:/notifications', 'test:GET:/tasks', 'test:GET:/tasks/export.csv', 'test:POST:/tasks/import']);
+  assert.equal(actions.find((a) => a.path === '/tasks/export.csv').file, true);
+  assert.equal(actions.find((a) => a.path === '/notifications').app, 'core');
   await app.close();
 });
 
@@ -119,13 +127,13 @@ test('MCP stateless initialization/list/call use the official transport and reje
   const rpc = (method, params = {}, extra = {}) => app.inject({ method: 'POST', url: '/mcp', headers: { ...headers, ...extra }, payload: { jsonrpc: '2.0', id: 1, method, params } });
   const init = await rpc('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test-client', version: '1.0' } });
   assert.equal(init.statusCode, 200, init.body); assert.equal(init.json().result.serverInfo.name, 'nexus');
-  assert.equal((await rpc('tools/list')).json().result.tools.length, 5);
+  assert.equal((await rpc('tools/list')).json().result.tools.length, 6);
   const result = (await rpc('tools/call', { name: 'list_apps', arguments: {} })).json().result;
   assert.equal(JSON.parse(result.content[0].text).company_id, 'org_a');
   assert.equal((await rpc('tools/list', {}, { authorization: '' })).statusCode, 401);
   assert.equal((await rpc('tools/list', {}, { origin: 'https://evil.test' })).statusCode, 403);
   f.connection.allow_write = false;
-  assert.equal((await rpc('tools/list')).json().result.tools.some((t) => t.name === 'write_action'), false);
+  assert.equal((await rpc('tools/list')).json().result.tools.some((t) => t.name === 'write_action' || t.name === 'upload_file'), false);
   f.state.revoked = true;
   assert.equal((await rpc('tools/list')).statusCode, 401);
   await app.close();
@@ -225,4 +233,73 @@ test('MCP accepts configured company domains while rejecting spoofed suffixes an
   for (const origin of ['null', 'https://evil.example', 'https://kartikmaandothiya.fun/attacker', 'http://flp-worldwide-9491.kartikmaandothiya.fun', 'https://flp-worldwide-9491.kartikmaandothiya.fun:8443']) assert.equal(mcpRequestAllowed({ origin }, env), false, origin);
   assert.equal(mcpRequestAllowed({ host: 'flp-worldwide-9491.kartikmaandothiya.fun' }, {}), false);
   assert.equal(mcpRequestAllowed({ host: 'flp-worldwide-9491.kartikmaandothiya.fun' }, { MCP_PUBLIC_URL: 'https://flp-worldwide-9491.kartikmaandothiya.fun/api/mcp' }), true);
+});
+
+test('upload_file sends the bytes to Documents as the user and attaches them to a task', async () => {
+  const f = fixture();
+  f.state.apps = ['tasks', 'documents'];
+  f.state.permissions.push('documents.files.upload');
+  f.connection.apps = ['tasks', 'documents'];
+  const uploads = [];
+  const fetcher = async (url, options = {}) => {
+    if (String(url).endsWith('/api/documents/upload')) {
+      const file = options.body.get('file');
+      uploads.push({ auth: options.headers.authorization, name: file.name, type: file.type, bytes: Buffer.from(await file.arrayBuffer()) });
+      return Response.json({ data: { id: 'doc_0123456789abcdefghjkmnpqrs', name: file.name, kind: 'image', byte_size: file.size } }, { status: 201 });
+    }
+    if (String(url).includes('/attachments')) return Response.json({ data: { id: 'att_x', document_id: JSON.parse(options.body).document_id } }, { status: 201 });
+    return fixtureFetch(f)(url, options);
+  };
+  const engine = createActionEngine({ config, db: f.db, fetcher: async (url, options) => (String(url).includes('/api/documents/') || String(url).includes('/attachments') ? fetcher(url, options) : fixtureFetch(f)(url, options)), upstreams: { tasks: 'http://tasks.test' } });
+  const ctx = await engine.context('user-jwt', f.connection);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  const result = await engine.tool(ctx, 'upload_file', { name: 'site.png', content_base64: `data:image/png;base64,${png.toString('base64')}`, attach_to_task_id: 'tsk_0123456789abcdefghjkmnpqrs' });
+  assert.equal(uploads.length, 1);
+  assert.equal(uploads[0].auth, 'Bearer user-jwt');
+  assert.equal(uploads[0].type, 'image/png');
+  assert.deepEqual(uploads[0].bytes, png);
+  assert.equal(result.document.id, 'doc_0123456789abcdefghjkmnpqrs');
+  assert.equal(result.attachment.document_id, 'doc_0123456789abcdefghjkmnpqrs');
+  await assert.rejects(engine.tool(ctx, 'upload_file', { name: 'x.png' }), /either content_base64 or source_url/);
+  await assert.rejects(engine.tool(ctx, 'upload_file', { name: 'x.png', content_base64: 'AA==' }, { propose: true }), /Documents app/);
+  f.connection.allow_write = false;
+  await assert.rejects(engine.tool(await engine.context('user-jwt', f.connection), 'upload_file', { name: 'x.png', content_base64: 'AA==' }), /read-only/);
+  assert.equal(uploads.length, 1);
+});
+
+test('uploads from a URL never reach private addresses', () => {
+  for (const ip of ['127.0.0.1', '10.1.2.3', '169.254.169.254', '172.16.0.1', '192.168.1.1', '100.64.0.1', '::1', 'fd00::1', '::ffff:127.0.0.1', '0.0.0.0']) assert.equal(privateAddress(ip), true, ip);
+  for (const ip of ['8.8.8.8', '142.250.183.14', '2606:4700::1111']) assert.equal(privateAddress(ip), false, ip);
+});
+
+test('file reads come back as files; images are shown to the agent as images', async () => {
+  const f = fixture();
+  const file = { ...read, id: 'tasks:GET:/tasks/:taskId/export.csv', path: '/tasks/:taskId/export.csv', file: true };
+  const engine = createActionEngine({ config, db: f.db, upstreams: { tasks: 'http://tasks.test' }, fetcher: async (url, options) => {
+    if (String(url).endsWith('/internal/ai-capabilities')) return Response.json({ data: [read, write, file] });
+    if (String(url).endsWith('/export.csv')) return new Response('name,done\nCall Ravi,no\n', { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="tasks.csv"' } });
+    return fixtureFetch(f)(url, options);
+  } });
+  const ctx = await engine.context('jwt', f.connection);
+  const result = await engine.tool(ctx, 'read_action', { action_id: file.id, params: { taskId: 'tsk_a' } });
+  assert.equal(result.file.name, 'tasks.csv');
+  assert.match(result.file.text, /Call Ravi/);
+  const image = toolContent({ file: { name: 'a.png', mime_type: 'image/png', size: 3, base64: 'AAAA' } });
+  assert.equal(image.content[0].type, 'image');
+  assert.equal(image.content[0].mimeType, 'image/png');
+});
+
+test('actions are found by the service that published them, whatever their path', async () => {
+  const f = fixture();
+  const audit = { ...read, id: 'audit:GET:/audit', path: '/audit', app: 'core', permissions: ['core.audit.view'], input: { params: { type: 'object' }, query: { type: 'object' }, body: { type: 'object' } } };
+  f.state.permissions.push('core.audit.view');
+  f.connection.apps = ['tasks', 'core'];
+  const engine = createActionEngine({ config, db: f.db, upstreams: { tasks: 'http://tasks.test', audit: 'http://audit.test' }, fetcher: async (url, options) => {
+    if (String(url) === 'http://audit.test/internal/ai-capabilities') return Response.json({ data: [audit] });
+    if (String(url).endsWith('/api/audit')) return Response.json({ data: [{ id: 'aud_1' }] });
+    return fixtureFetch(f)(url, options);
+  } });
+  const ctx = await engine.context('jwt', f.connection);
+  assert.deepEqual((await engine.tool(ctx, 'read_action', { action_id: 'audit:GET:/audit' })).data, [{ id: 'aud_1' }]);
+  await assert.rejects(engine.tool(ctx, 'read_action', { action_id: 'nowhere:GET:/audit' }), /Action not found/);
 });

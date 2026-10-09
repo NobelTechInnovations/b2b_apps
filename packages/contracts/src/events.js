@@ -79,6 +79,7 @@ export const EVENTS = {
   TASK_CREATED: 'tasks.task.created',
   TASK_ASSIGNED: 'tasks.task.assigned',
   TASK_COMPLETED: 'tasks.task.completed',
+  TASK_DUE: 'tasks.task.due',
   BOARD_MEMBER_ADDED: 'tasks.board.member_added',
 
   // ── helpdesk & knowledge ────────────────────────────────────────────────

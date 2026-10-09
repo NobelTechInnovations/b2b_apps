@@ -34,7 +34,9 @@
 .filters label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .filters input[type='checkbox'] { accent-color: var(--task-accent); }
 .updating { font-size: 10px; color: var(--text-tertiary); }
-.board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.board { display: flex; min-width: 0; max-width: 100%; gap: 20px; align-items: flex-start; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding-bottom: 12px; scrollbar-width: thin; }
+/* Every column on one row, however many there are; the row scrolls sideways. */
+.board > .column { flex: 0 0 300px; scroll-snap-align: start; }
 .column { min-width: 0; border-radius: 12px; transition: background .15s; }
 .column[data-drop-target='true'] { background: var(--task-accent-soft); }
 .columnHeading { padding: 4px 2px 16px; }
@@ -62,6 +64,14 @@
 .priority[data-priority='high'] { background: #f5eee0; color: #91703c; }
 .priority[data-priority='urgent'] { background: #f8e8e6; color: #a55c56; }
 .subtaskTag { font-size: 9px; color: var(--text-tertiary); }
+.cardTags { flex-wrap: wrap; }
+.stageTag, .filesTag { display: inline-flex; gap: 5px; align-items: center; padding: 3px 7px; border-radius: 4px; font-size: 9px; font-weight: 600; background: #eeeff2; color: #5f6170; }
+.stageTag[data-status='in_progress'] { background: #f3ebf1; color: #7f5a73; }
+.stageTag[data-status='blocked'] { background: #f6eedf; color: #8a6530; }
+.stageTag[data-status='done'] { background: #e7f1eb; color: #4f7461; }
+.filesTag { gap: 3px; background: #e8eefb; color: #4b63a6; }
+.listStatus .filesTag { margin-left: 6px; }
+:global([data-theme='dark']) .stageTag, :global([data-theme='dark']) .filesTag { background: rgb(255 255 255 / 8%); color: var(--text-secondary); }
 .cardFooter { border-top: 1px solid var(--border-subtle); padding-top: 12px; }
 .due { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .due[data-overdue='true'] { color: #a55c56; }
@@ -106,8 +116,8 @@
 .editorForm { display: flex; flex-direction: column; gap: 20px; }
 .editorForm > button[type='submit'] { align-self: flex-start; background: #78546b; }
 :global([data-theme='dark']) .workspace { --task-paper: #211f25; --task-accent: #c09caf; --task-accent-soft: #3a2e38; }
-@media (max-width: 1200px) { .board { grid-template-columns: repeat(2, minmax(0, 1fr)); }.projectGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.summary > div { padding: 0 16px; }.summary p { display: none; }.headingRow { align-items: flex-start; flex-direction: column; }.liveLabel { display: none; } }
-@media (max-width: 700px) { .hero { padding: 20px 20px 0; }.heroTop { gap: 12px; }.eyebrow { font-size: 9px; }.heroActions { flex-wrap: wrap; }.summary { flex-wrap: wrap; row-gap: 14px; }.summary > div { width: 50%; padding: 0; border: 0; }.summary strong { font-size: 21px; }.tabs { gap: 22px; overflow-x: auto; }.filters { margin-left: 0; }.board,.projectGrid { grid-template-columns: minmax(0, 1fr); }.list { overflow-x: auto; }.listHeader,.listRow { min-width: 650px; }.headingRow h1 { color: #fff; font-size: 26px; } }
+@media (max-width: 1200px) { .projectGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.summary > div { padding: 0 16px; }.summary p { display: none; }.headingRow { align-items: flex-start; flex-direction: column; }.liveLabel { display: none; } }
+@media (max-width: 700px) { .hero { padding: 20px 20px 0; }.heroTop { gap: 12px; }.eyebrow { font-size: 9px; }.heroActions { flex-wrap: wrap; }.summary { flex-wrap: wrap; row-gap: 14px; }.summary > div { width: 50%; padding: 0; border: 0; }.summary strong { font-size: 21px; }.tabs { gap: 22px; overflow-x: auto; }.filters { margin-left: 0; }.board > .column { flex-basis: 82vw; }.projectGrid { grid-template-columns: minmax(0, 1fr); }.list { overflow-x: auto; }.listHeader,.listRow { min-width: 650px; }.headingRow h1 { color: #fff; font-size: 26px; } }
 @media (prefers-reduced-motion: reduce) { .taskCard { transition: none; }.taskCard:hover { transform: none; } }
 
 /* ── boards (Monday-style) ─────────────────────────────────────────────── */

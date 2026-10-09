@@ -11,8 +11,9 @@ import { EVENTS } from '@nexus/contracts/events';
  * The person who caused an event is never notified about it. That is enforced
  * once, by the consumer, rather than remembered in every rule here.
  *
- * A rule may add `email: (actorName) => ({ subject, heading, lines, button })`
- * for news people should not miss: the same people are then emailed too.
+ * Every notification is also emailed to the same people, straight away. A rule
+ * may shape that email with `email: (actorName) => ({ subject, heading, lines,
+ * button })`, or turn it off with `email: false`.
  */
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -134,6 +135,26 @@ export const RULES = {
     }),
   }] : []),
 
+  [EVENTS.TASK_DUE]: (d) => (d.user_id ? [{
+    kind: 'task.due',
+    app: 'tasks',
+    users: [d.user_id],
+    title: `${d.due_date && d.due_date < new Date().toISOString().slice(0, 10) ? 'Overdue' : 'Due today'}: ${d.title}`,
+    body: [d.board_name && `Board: ${d.board_name}`, d.due_date && `Due ${shortDate(d.due_date)}`].filter(Boolean).join(' · ') || null,
+    link: `/tasks?task=${d.task_id}`,
+    email: () => ({
+      subject: `Reminder: ${d.title} is ${d.due_date && d.due_date < new Date().toISOString().slice(0, 10) ? `overdue (was due ${shortDate(d.due_date)})` : 'due today'}`,
+      heading: 'Task reminder',
+      lines: [
+        `“${d.title}”`,
+        [d.board_name && `Board: ${d.board_name}`, d.due_date && `Due: ${shortDate(d.due_date)}`,
+          (d.priority === 'high' || d.priority === 'urgent') && `Priority: ${d.priority}`].filter(Boolean).join(' · '),
+        d.description,
+      ],
+      button: 'Open the task',
+    }),
+  }] : []),
+
   [EVENTS.BOARD_MEMBER_ADDED]: (d) => (d.user_id ? [{
     kind: 'board.member_added',
     app: 'tasks',
@@ -231,9 +252,10 @@ export const RULES = {
     body: d.via ? (d.via.startsWith('Handed over') ? d.via : `From ${d.via}`) : null,
     link: d.count > 1 || !d.lead_id ? '/leads?owner=me&fresh=1' : `/leads?open=${d.lead_id}`,
   }] : []),
-  [EVENTS.LEAD_FOLLOWUP_DUE]: (d) => (d.assigned_to ? [{
-    kind: 'leads.followup_due', app: 'leads', users: [d.assigned_to],
-    title: `${FOLLOWUP_VERB[d.kind] ?? 'Follow up with'} ${d.name} ${clockTime(d.due_at)}`.trim(),
+  // The person it is assigned to and the lead's owner.
+  [EVENTS.LEAD_FOLLOWUP_DUE]: (d) => ((d.user_ids ?? [d.assigned_to]).filter(Boolean).length ? [{
+    kind: 'leads.followup_due', app: 'leads', users: (d.user_ids ?? [d.assigned_to]).filter(Boolean),
+    title: `${d.overdue ? 'Missed: ' : ''}${FOLLOWUP_VERB[d.kind] ?? 'Follow up with'} ${d.name} ${clockTime(d.due_at)}`.trim(),
     body: [d.phone, d.company_name, d.note].filter(Boolean).join(' · ') || null,
     link: `/leads?open=${d.lead_id}`,
   }] : []),

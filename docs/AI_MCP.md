@@ -100,13 +100,20 @@ Reload MCP connections or open a new Codex session after changing its config.
 `pnpm mcp:check` initializes the real HTTP client and lists accessible apps without
 reading business records or making changes.
 
-Tools: `list_apps`, `find_actions`, `describe_action`, `read_action`, `write_action`.
-Action schemas come from guarded, registered JSON routes. The original handlers
-remain responsible for validation and record visibility. Internal/public routes,
-credential routes, file transfers and routes without declared permission guards
-are not advertised. New compatible guarded routes are discovered automatically.
-Read-only connections do not advertise writes. External agents with write access
-can execute changes; their own client controls user confirmation.
+Tools: `list_apps`, `find_actions`, `describe_action`, `read_action`, `write_action`,
+`upload_file`. Action schemas come from every signed-in route: permission-guarded
+routes in each app, bulk imports, and the user's own notifications, access
+requests and workspace (under `core`). Downloads and exports (`.csv`, `.pdf`,
+`/download`, `/export`) are `read_action`s that return the file: text as text,
+images as MCP images the agent can see, other files as base64 (up to 10 MB).
+`upload_file` puts a file into Documents (base64 or a public https `source_url`,
+up to 10 MB) and can attach it to a task; the local stdio bridge also accepts a
+`file_path` on this computer. URL uploads never fetch private or internal
+addresses. Internal/public routes and credential routes are not advertised. New
+signed-in routes are discovered automatically. The original handlers remain
+responsible for validation and record visibility. Read-only connections do not
+advertise writes or uploads. External agents with write access can execute
+changes; their own client controls user confirmation.
 
 OAuth-only remote clients are not supported yet. A remote hosted agent cannot
 reach localhost. The stdio bridge supports local clients using bearer credentials.
