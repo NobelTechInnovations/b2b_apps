@@ -8,7 +8,6 @@ import {
   Users, Table2, Settings2, UserPlus, Trash2, AlertCircle, MoreHorizontal, Image as ImageIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { API_BASE } from '@/lib/api-base';
 import { date as fmtDate } from '@/lib/format';
 import { useWorkspace } from '@/lib/workspace';
 import { Button } from '@/components/ui/button';
@@ -18,6 +17,7 @@ import { Menu, MenuItem } from '@/components/ui/menu';
 import { Modal } from '@/components/ui/modal';
 import { Alert } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
+import { TaskFiles } from '@/components/tasks/task-files';
 import styles from './tasks.module.css';
 
 const STATUSES = { todo: 'To do', in_progress: 'Working on it', blocked: 'Stuck', done: 'Done' };
@@ -50,7 +50,7 @@ export default function TasksClient({ view = 'work' }) {
   const [error, setError] = useState(''), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState(null), [detail, setDetail] = useState(null), [projectDraft, setProjectDraft] = useState(null);
   const [milestones, setMilestones] = useState([]), [documents, setDocuments] = useState([]);
-  const [comment, setComment] = useState(''), [subtask, setSubtask] = useState(''), [documentId, setDocumentId] = useState('');
+  const [comment, setComment] = useState(''), [subtask, setSubtask] = useState('');
   const [time, setTime] = useState(blankTime);
   const [timeTask, setTimeTask] = useState(null);
   const [milestone, setMilestone] = useState({ title: '', due_date: '' });
@@ -62,6 +62,7 @@ export default function TasksClient({ view = 'work' }) {
   const [columns, setColumns] = useState([]);
   // The columns of the board chosen in the task form, so a task can be put in "Pending".
   const [draftColumns, setDraftColumns] = useState([]);
+  const [detailColumns, setDetailColumns] = useState([]);
   const [columnDraft, setColumnDraft] = useState(null); // { id?, name, status, move_to? }
   const active = workspace?.installed?.includes('tasks') && workspace?.apps?.includes('tasks');
   const required = view === 'projects' ? 'tasks.projects.view' : view === 'time' ? 'tasks.time.view' : 'tasks.tasks.view';
@@ -137,6 +138,13 @@ export default function TasksClient({ view = 'work' }) {
   }, [view, projectId]);
   useEffect(() => { loadColumns(); }, [loadColumns]);
   useEffect(() => {
+    setDetailColumns([]);
+    if (!detail?.project_id) return;
+    let live = true;
+    api.get(`/tasks/projects/${detail.project_id}/columns`).then(r => { if (live) setDetailColumns(r.data ?? []); }).catch(() => {});
+    return () => { live = false; };
+  }, [detail?.project_id]);
+  useEffect(() => {
     setDraftColumns([]);
     if (!draft?.project_id) return;
     let live = true;
@@ -160,7 +168,7 @@ export default function TasksClient({ view = 'work' }) {
     setError('');
     try {
       const r = await api.get(`/tasks/${taskId}`);
-      setDetail(r.data); setDraft(null); setComment(''); setSubtask(''); setDocumentId('');
+      setDetail(r.data); setDraft(null); setComment(''); setSubtask('');
       if (can('documents.files.view') && workspace.installed.includes('documents')) {
         api.get('/documents', { query: { limit: 100 } }).then(r => setDocuments(r.data)).catch(() => setDocuments([]));
       }
@@ -239,6 +247,14 @@ export default function TasksClient({ view = 'work' }) {
 
   // Who can be handed a task: on a private board, only its members (admins
   // see every board, so they count too); elsewhere anyone with task access.
+  // People who can hold a task on this board (members only, if it is private).
+  const boardPeople = (boardId) => {
+    const board = projects.find(p => p.id === boardId);
+    const everyone = people.filter(p => p.status === 'active' || !p.status);
+    if (!board || board.visibility !== 'private') return everyone;
+    const onBoard = new Set((board.members ?? []).map(m => m.user_id));
+    return everyone.filter(p => onBoard.has(p.user_id));
+  };
   const assignable = useMemo(() => {
     const boardId = draft?.project_id;
     const board = projects.find(p => p.id === boardId);
@@ -354,16 +370,21 @@ export default function TasksClient({ view = 'work' }) {
       </form>}
     </Drawer>
 
-    <Drawer className={styles.drawer} open={Boolean(detail) && !draft && !timeTask} onClose={() => { if (!busy) setDetail(null); }} title={detail?.title} subtitle={detail ? `${STATUSES[detail.status]} · ${detail.priority} priority` : ''}>
+    <Drawer className={styles.drawer} open={Boolean(detail) && !draft && !timeTask} onClose={() => { if (!busy) setDetail(null); }} title={detail?.title} subtitle={detail ? `${detailColumns.find(c => c.id === detail.column_id)?.name ?? STATUSES[detail.status]} · ${detail.priority} priority` : ''}>
       {detail && <div className="space-y-6">{error && <Alert tone="critical">{error}</Alert>}
-        <div className="flex flex-wrap gap-2">{canEditTasks(detail) && <Button onClick={() => { setDraft(detail); setDetail(null); }}>Edit task</Button>}{((can('tasks.tasks.delete') && canEditTasks(detail)) || detail.created_by === user.id) && <Button variant="danger-ghost" disabled={busy} onClick={() => perform(async () => { await api.del(`/tasks/${detail.id}`); setDetail(null); }, 'Task deleted')}>Delete task</Button>}</div>
-        <p className="whitespace-pre-wrap text-sm">{detail.description || 'No description yet.'}</p><div className="text-sm text-[var(--text-secondary)]">{projects.find(p => p.id === detail.project_id)?.name ?? 'Personal to-do'} · Assigned to {personName(detail.assignee_id)} · {detail.due_date ? `Due ${fmtDate(detail.due_date)}` : 'No deadline'}</div>
+        {canEditTasks(detail) && <QuickEdit key={detail.id} task={detail} columns={detailColumns} busy={busy} user={user} canAssign={can('tasks.tasks.assign')}
+          people={boardPeople(detail.project_id)} personName={personName} onSave={data => perform(async () => { await api.patch(`/tasks/${detail.id}`, data); await refreshDetail(); }, 'Saved')} />}
+        <div className="flex flex-wrap gap-2">{canEditTasks(detail) && <Button variant="secondary" onClick={() => { setDraft(detail); setDetail(null); }}>Open full editor</Button>}{((can('tasks.tasks.delete') && canEditTasks(detail)) || detail.created_by === user.id) && <Button variant="danger-ghost" disabled={busy} onClick={() => perform(async () => { await api.del(`/tasks/${detail.id}`); setDetail(null); }, 'Task deleted')}>Delete task</Button>}</div>
+        {!canEditTasks(detail) && <p className="whitespace-pre-wrap text-sm">{detail.description || 'No description yet.'}</p>}<div className="text-sm text-[var(--text-secondary)]">{projects.find(p => p.id === detail.project_id)?.name ?? 'Personal to-do'} · Assigned to {personName(detail.assignee_id)} · {detail.due_date ? `Due ${fmtDate(detail.due_date)}` : 'No deadline'}</div>
         {detail.source_app && <Link href={sourceLink} className="text-sm text-[var(--text-brand)]">Open the linked {detail.source_type} →</Link>}
         <section className="space-y-3"><h3 className="font-semibold">Subtasks</h3>{detail.subtasks.map(t => <button key={t.id} className="block text-sm text-[var(--text-brand)]" onClick={() => openTask(t.id)}>{t.status === 'done' ? '✓ ' : '○ '}{t.title}</button>)}{can('tasks.tasks.create') && canEditTasks(detail) && detail.status !== 'done' && <form className="flex gap-2" onSubmit={e => { e.preventDefault(); perform(async () => { await api.post('/tasks', { title: subtask, parent_id: detail.id }); setSubtask(''); await refreshDetail(); }); }}><Input required aria-label="Subtask title" placeholder="Add a subtask" value={subtask} onChange={e => setSubtask(e.target.value)} /><Button type="submit" loading={busy}>Add</Button></form>}</section>
         <section className="space-y-3"><h3 className="font-semibold">Updates</h3>{detail.comments.map(c => <div key={c.id} className="rounded-lg bg-[var(--surface-sunken)] p-3 text-sm"><p className="whitespace-pre-wrap">{c.body}</p><p className="mt-2 text-xs text-[var(--text-tertiary)]">{personName(c.created_by)} · {fmtDate(c.created_at, 'datetime')}</p></div>)}{can('tasks.tasks.edit') && <form onSubmit={e => { e.preventDefault(); perform(async () => { await api.post(`/tasks/${detail.id}/comments`, { body: comment }); setComment(''); await refreshDetail(); }, 'Update posted'); }} className="space-y-2"><Textarea required aria-label="Comment" placeholder="Write an update…" value={comment} onChange={e => setComment(e.target.value)} /><Button type="submit" loading={busy}>Post update</Button></form>}</section>
         {can('tasks.time.view') && <section className="space-y-2"><h3 className="font-semibold">Time on this task: {duration(detail.time_entries.reduce((sum, entry) => sum + entry.minutes, 0))}</h3>{detail.time_entries.map(t => <p key={t.id} className="text-sm">{t.worked_on} · {duration(t.minutes)} · {personName(t.user_id)} {t.note && `— ${t.note}`}</p>)}{!detail.time_entries.length && <p className="text-sm text-[var(--text-secondary)]">No time entries yet.</p>}</section>}
         {can('tasks.time.log') && <Button icon={Timer} onClick={() => logTime(detail)}>Log time on this task</Button>}
-        <section className="space-y-3"><h3 className="flex items-center gap-2 font-semibold"><Paperclip size={16} />Documents</h3>{detail.attachments.map(a => <div key={a.id} className="flex items-center justify-between text-sm"><a className="text-[var(--text-brand)]" href={`${API_BASE}/api/documents/${a.document_id}/download`} target="_blank" rel="noreferrer">{a.name}</a>{canEditTasks(detail) && <Button size="xs" disabled={busy} onClick={() => perform(async () => { await api.del(`/tasks/${detail.id}/attachments/${a.id}`); await refreshDetail(); })}>Unlink</Button>}</div>)}{canEditTasks(detail) && can('documents.files.view') && <form className="flex gap-2" onSubmit={e => { e.preventDefault(); perform(async () => { await api.post(`/tasks/${detail.id}/attachments`, { document_id: documentId }); await refreshDetail(); }); }}><Select required aria-label="Document to attach" value={documentId} onChange={e => setDocumentId(e.target.value)}><option value="">Choose a workspace document</option>{documents.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</Select><Button type="submit" loading={busy}>Attach</Button></form>}<p className="text-xs text-[var(--text-secondary)]">Upload files in Documents, then link them here. Downloads retain Documents permissions.</p></section>
+        <TaskFiles task={detail} canEdit={canEditTasks(detail)} canUpload={can('documents.files.upload') && workspace.installed.includes('documents')} documents={can('documents.files.view') ? documents : []} busy={busy}
+          onAttach={documentId => perform(async () => { await api.post(`/tasks/${detail.id}/attachments`, { document_id: documentId }); await refreshDetail(); }, 'File attached')}
+          onUnlink={a => perform(async () => { await api.del(`/tasks/${detail.id}/attachments/${a.id}`); await refreshDetail(); }, 'Removed from task')}
+          onUploaded={async () => { await refreshDetail(); await load(); toast.success('Uploaded'); }} />
       </div>}
     </Drawer>
 
@@ -433,6 +454,39 @@ export default function TasksClient({ view = 'work' }) {
         </div>
       ))}
     </Modal>
+  </div>;
+}
+
+/** The task's main fields, edited in place: each change saves on its own. */
+function QuickEdit({ task, columns, busy, user, canAssign, people, personName, onSave }) {
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description ?? '');
+  const stage = columns.find(c => c.id === task.column_id) ?? columns.find(c => c.status === task.status);
+  const saveText = (key, value) => {
+    const next = key === 'title' ? value.trim() : value;
+    if (key === 'title' && !next) { setTitle(task.title); return; }
+    if (next !== (task[key] ?? '')) onSave({ [key]: next });
+  };
+  return <div className={styles.quickEdit}>
+    <input aria-label="Task title" className={styles.quickTitle} value={title} maxLength={200} disabled={busy}
+      onChange={e => setTitle(e.target.value)} onBlur={() => saveText('title', title)} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setTitle(task.title); e.currentTarget.blur(); } }} />
+    <div className={styles.quickGrid}>
+      <label><span>{columns.length ? 'Stage' : 'Status'}</span>
+        {columns.length
+          ? <Select value={stage?.id ?? ''} disabled={busy} onChange={e => { const c = columns.find(x => x.id === e.target.value); onSave({ column_id: c.id, status: c.status }); }}>{columns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+          : <Select value={task.status} disabled={busy} onChange={e => onSave({ status: e.target.value })}>{Object.entries(STATUSES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select>}
+      </label>
+      <label><span>Priority</span><Select value={task.priority} disabled={busy} onChange={e => onSave({ priority: e.target.value })}>{PRIORITIES.map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}</Select></label>
+      <label><span>Assignee</span><Select value={task.assignee_id ?? ''} disabled={busy} onChange={e => onSave({ assignee_id: e.target.value || null })}>
+        <option value="">Unassigned</option><option value={user.id}>You</option>
+        {canAssign && people.filter(p => p.user_id !== user.id).map(p => <option key={p.user_id} value={p.user_id}>{p.name ?? p.email}</option>)}
+        {task.assignee_id && task.assignee_id !== user.id && !(canAssign && people.some(p => p.user_id === task.assignee_id)) && <option value={task.assignee_id}>{personName(task.assignee_id)}</option>}
+      </Select></label>
+      <label><span>Due date</span><Input type="date" value={task.due_date ?? ''} disabled={busy} onChange={e => onSave({ due_date: e.target.value || null })} /></label>
+    </div>
+    <label className={styles.quickDescription}><span>Description</span>
+      <Textarea rows={3} placeholder="Add context, a checklist or a useful detail…" value={description} disabled={busy} onChange={e => setDescription(e.target.value)} onBlur={() => saveText('description', description)} />
+    </label>
   </div>;
 }
 

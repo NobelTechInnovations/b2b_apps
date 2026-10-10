@@ -159,9 +159,21 @@
 .pill[data-priority='high'] { background: #fdab3d; } .pill[data-priority='urgent'] { background: #e2445c; }
 .addRow { display: flex; gap: 8px; padding: 8px 12px 8px 17px; border-top: 1px solid var(--border-subtle); }
 .addRow input { flex: 1; background: transparent; font-size: 12px; outline: none; padding: 4px 0; }
-.memberRow { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); }
-.memberRow > div { flex: 1; min-width: 0; }
-.memberRow strong { display: block; font-size: 13px; font-weight: 600; }
+.memberRow { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+.memberRow > div { flex: 1 1 auto; min-width: 0; }
+.memberRow strong { display: block; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The role picker keeps its size; the name gets the rest of the row. */
+.memberRow > select { flex: 0 0 132px; width: 132px; }
+.memberRow > button { flex-shrink: 0; }
+.memberRow > .avatar { flex-shrink: 0; }
+.quickEdit { display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--surface-raised); }
+.quickTitle { width: 100%; font-size: 17px; font-weight: 650; letter-spacing: -.01em; padding: 6px 8px; margin: -6px -8px 0; border: 1px solid transparent !important; border-radius: 7px; background: transparent; color: var(--text-primary); }
+.quickTitle:hover { border-color: var(--border-default) !important; }
+.quickTitle:focus { outline: none; border-color: var(--task-accent) !important; background: var(--surface-page); }
+.quickGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.quickGrid label, .quickDescription { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.quickGrid span, .quickDescription span { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-tertiary); }
+@media (max-width: 480px) { .quickGrid { grid-template-columns: minmax(0, 1fr); } .memberRow > select { flex-basis: 110px; width: 110px; } }
 .memberRow small { display: block; font-size: 11px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; }
 .choice { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--border-default); border-radius: 10px; cursor: pointer; }
 .choice[data-selected='true'] { border-color: var(--task-accent); background: var(--task-accent-soft); }

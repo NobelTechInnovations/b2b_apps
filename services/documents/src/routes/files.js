@@ -6,6 +6,8 @@ import { EVENTS } from '@nexus/contracts/events';
 import { classify, humanSize } from '../lib/storage.js';
 import { profileWorkbook } from '../lib/spreadsheet.js';
 
+const PREVIEWABLE = /^(image\/(png|jpe?g|gif|webp|avif|bmp)|application\/pdf)$/i;
+
 export async function fileRoutes(app) {
   const { db, storage, config, quota } = app;
 
@@ -325,7 +327,8 @@ export async function fileRoutes(app) {
       preHandler: [app.loadContext, requirePermission('documents.files.view')],
       schema: {
         params: params({ documentId: v.id('doc') }),
-        querystring: { type: 'object', properties: { version: { type: 'integer', minimum: 1 } }, additionalProperties: false },
+        // `inline=true` shows a picture or PDF in the browser (previews); otherwise it downloads.
+        querystring: { type: 'object', properties: { version: { type: 'integer', minimum: 1 }, inline: { type: 'boolean' } }, additionalProperties: false },
       },
     },
     async (request, reply) => {
@@ -356,8 +359,13 @@ export async function fileRoutes(app) {
 
       const buffer = await storage.get(blob.storage_key);
 
-      reply.header('content-type', blob.mime_type ?? 'application/octet-stream');
-      reply.header('content-disposition', `attachment; filename="${encodeURIComponent(document.name)}"`);
+      const type = blob.mime_type ?? 'application/octet-stream';
+      // Only types a browser shows without running anything: never SVG or HTML.
+      const inline = request.query.inline && PREVIEWABLE.test(type);
+      reply.header('content-type', type);
+      reply.header('content-disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(document.name)}"`);
+      reply.header('x-content-type-options', 'nosniff');
+      if (inline) reply.header('cache-control', 'private, max-age=300');
       reply.header('content-length', buffer.byteLength);
       return reply.send(buffer);
     },
