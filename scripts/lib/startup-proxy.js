@@ -12,7 +12,7 @@ function forwardedHeaders(headers) {
 }
 
 /** The hosting entry process must listen before the service processes finish booting. */
-export function createStartupProxy({ gatewayPort }) {
+export function createStartupProxy({ gatewayPort, status = () => null }) {
   const server = http.createServer((request, response) => {
     const upstream = http.request({
       hostname: '127.0.0.1',
@@ -42,6 +42,9 @@ export function createStartupProxy({ gatewayPort }) {
         error: {
           code: 'api_unavailable',
           message: 'The API is starting or unavailable. Please try again shortly.',
+          // Which service is starting or failed, and a short reason — never
+          // settings or credentials — so a failed start can be read remotely.
+          startup: status(),
         },
       }));
     });

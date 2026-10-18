@@ -32,6 +32,18 @@ const stagger = Number(base.STARTUP_STAGGER_MS ?? 1500);
 const single = (base.API_PROCESS_MODE ?? 'single') !== 'multi';
 const children = new Set();
 let proxy;
+// What the startup page reports while the gateway is not answering.
+const startup = { mode: null, started: [], starting: null, failed: null, since: new Date().toISOString() };
+
+/** A failure in a few words: a code and a message without addresses or secrets. */
+function reason(error) {
+  const text = String(error?.message ?? error)
+    .replace(/[a-z]+:\/\/[^\s'"]+/gi, '<url>')
+    .replace(/\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b/g, '<address>')
+    .replace(/[\w.-]+\.(com|co|in|net|io|org|supabase\.co)(:\d+)?\b/gi, '<host>')
+    .slice(0, 200);
+  return { code: error?.code ?? null, message: text };
+}
 let stopping = false;
 let exitCode = 0;
 
@@ -119,6 +131,7 @@ function startChildren() {
  * set for it alone; afterwards the shared settings are put back.
  */
 async function startInProcess() {
+  startup.mode = 'single';
   console.log(`Nexus API: starting ${order.length} services in one process; gateway on :${gatewayPort}`);
   for (const service of order) {
     if (stopping) return;
@@ -126,12 +139,18 @@ async function startInProcess() {
     for (const key of Object.keys(process.env)) if (!(key in env)) delete process.env[key];
     Object.assign(process.env, env);
     process.chdir(path.join(ROOT, 'services', service.name));
+    startup.starting = service.name;
     try {
       await import(pathToFileURL(path.join(ROOT, 'services', service.name, 'src', 'index.js')).href);
     } catch (error) {
-      console.error(`✖ ${service.name} failed to start: ${error.message}`);
-      process.exit(1);
+      console.error(`✖ ${service.name} failed to start: ${error.stack ?? error.message}`);
+      startup.failed = { service: service.name, ...reason(error) };
+      startup.starting = null;
+      // Keep the startup page up long enough to read why, then let the host restart.
+      setTimeout(() => process.exit(1), proxy ? 120_000 : 0);
+      return;
     }
+    startup.started.push(service.name);
     console.log(`✓ ${service.name}`);
   }
   process.chdir(ROOT);
@@ -141,7 +160,7 @@ async function startInProcess() {
 
 if (proxyEnabled) {
   // Hostinger checks listen() in this process; a listening child does not count.
-  proxy = createStartupProxy({ gatewayPort });
+  proxy = createStartupProxy({ gatewayPort, status: () => startup });
   proxy.on('error', (error) => {
     console.error(`API startup proxy failed: ${error.code ?? error.message}`);
     shutdown(1);
