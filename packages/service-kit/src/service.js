@@ -5,6 +5,8 @@ import helmet from '@fastify/helmet';
 import cookie from '@fastify/cookie';
 import sensible from '@fastify/sensible';
 import { randomUUID } from 'node:crypto';
+import http from 'node:http';
+import net from 'node:net';
 import { createLogger } from './logger.js';
 import { errorHandler } from './errors.js';
 import { authPlugin } from './auth.js';
@@ -162,6 +164,11 @@ export async function createService({
 /** Boot with graceful shutdown wired up. */
 export async function startService(app, { port, host = process.env.SERVICE_BIND_HOST ?? '0.0.0.0', name }) {
   let closing = false;
+  // Hostinger's Node runtime replaces http.Server's listen() so that only the
+  // first server in a process gets a port (later calls are silently ignored).
+  // With every service in one process, each must open its own internal port,
+  // so it uses Node's own listen, which that replacement does not touch.
+  if (Object.hasOwn(http.Server.prototype, 'listen')) app.server.listen = net.Server.prototype.listen;
 
   const close = async (signal) => {
     if (closing) return;
