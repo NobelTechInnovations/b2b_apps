@@ -9,9 +9,16 @@
  *
  * If any service exits, the whole container exits, so the platform restarts
  * it rather than leaving a gateway fronting a dead dependency.
+ *
+ * API_PROCESS_MODE=single runs every service inside this one Node process
+ * instead (each still on its own loopback port, with its own schema). Shared
+ * hosting such as Hostinger caps the number of processes and the memory, and
+ * one process (about 400 MB for all services) fits; it is the default everywhere.
+ * API_PROCESS_MODE=multi brings back one process per service.
  */
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { SERVICES, loadRootEnv, serviceEnv } from './lib/services.js';
 import { createStartupProxy } from './lib/startup-proxy.js';
 
@@ -21,6 +28,8 @@ const publicPort = base.PORT ?? '8080';
 const proxyEnabled = base.API_STARTUP_PROXY === 'true';
 const gatewayPort = proxyEnabled ? String(SERVICES.find((s) => s.name === 'gateway').port) : publicPort;
 const stagger = Number(base.STARTUP_STAGGER_MS ?? 1500);
+// One process unless asked otherwise: far less memory, and no process limits to hit.
+const single = (base.API_PROCESS_MODE ?? 'single') !== 'multi';
 const children = new Set();
 let proxy;
 let stopping = false;
@@ -40,14 +49,19 @@ if (proxyEnabled && Number(publicPort) === Number(gatewayPort)) {
   process.exit(1);
 }
 
-function start(service) {
+function envFor(service) {
   const env = serviceEnv(service, base);
   // Only the gateway's port is published by the platform; the others are
   // reachable inside the container alone (and still demand a token).
   if (service.name === 'gateway') env.PORT = gatewayPort;
-  if (proxyEnabled) env.SERVICE_BIND_HOST = '127.0.0.1';
+  if (proxyEnabled || (single && service.name !== 'gateway')) env.SERVICE_BIND_HOST = '127.0.0.1';
   // Tell everyone where the gateway lives inside the container.
   env.GATEWAY_URL = `http://localhost:${gatewayPort}`;
+  return env;
+}
+
+function start(service) {
+  const env = envFor(service);
 
   const child = spawn(process.execPath, ['src/index.js'], {
     cwd: path.join(ROOT, 'services', service.name),
@@ -84,15 +98,45 @@ function shutdown(code = 0) {
   }, 8_000).unref();
 }
 
-process.on('SIGTERM', () => shutdown(0));
-process.on('SIGINT', () => shutdown(0));
+// In one process, each service handles the signals itself.
+if (!single) {
+  process.on('SIGTERM', () => shutdown(0));
+  process.on('SIGINT', () => shutdown(0));
+}
 
 // Platform services first, the gateway last, so its health check only goes
 // green once everything behind it has started.
 const order = [...SERVICES.filter((s) => s.name !== 'gateway'), SERVICES.find((s) => s.name === 'gateway')];
 function startChildren() {
+  if (single) return startInProcess();
   order.forEach((service, index) => setTimeout(() => { if (!stopping) start(service); }, index * stagger));
   console.log(`Nexus API: starting ${order.length} services; gateway on :${gatewayPort}`);
+}
+
+/**
+ * Every service in this process, one after another. Each reads its settings
+ * (port, schema, URLs) and its working folder while it starts, so those are
+ * set for it alone; afterwards the shared settings are put back.
+ */
+async function startInProcess() {
+  console.log(`Nexus API: starting ${order.length} services in one process; gateway on :${gatewayPort}`);
+  for (const service of order) {
+    if (stopping) return;
+    const env = envFor(service);
+    for (const key of Object.keys(process.env)) if (!(key in env)) delete process.env[key];
+    Object.assign(process.env, env);
+    process.chdir(path.join(ROOT, 'services', service.name));
+    try {
+      await import(pathToFileURL(path.join(ROOT, 'services', service.name, 'src', 'index.js')).href);
+    } catch (error) {
+      console.error(`✖ ${service.name} failed to start: ${error.message}`);
+      process.exit(1);
+    }
+    console.log(`✓ ${service.name}`);
+  }
+  process.chdir(ROOT);
+  for (const key of Object.keys(process.env)) if (!(key in base)) delete process.env[key];
+  Object.assign(process.env, base);
 }
 
 if (proxyEnabled) {

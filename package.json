@@ -7,6 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "start": "node scripts/start-api.js",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:reset": "docker compose -f infra/docker-compose.yml down -v && pnpm infra:up",

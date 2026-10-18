@@ -81,15 +81,15 @@ subdomain, and no CORS list has to know each company's address.
 5. Give the service a domain (Railway's `*.up.railway.app` is fine, or
    `api.yourdomain.com`). Note it for Vercel.
 
-### Hostinger managed Node hosting
+### Hostinger
 
-The normal runner starts 15 child services and does not itself call `listen()`.
-Hostinger's managed runtime requires the entry process to call `listen()` within
-3 seconds. Enable the startup proxy so that process binds immediately while the
-services start. The proxy returns JSON with HTTP 503 until the gateway is available;
-it never returns a synthetic successful health check.
+The API runs every service inside **one Node process** by default
+(`API_PROCESS_MODE=single`, about 400 MB), so it fits Hostinger's process and
+memory limits. A whole-site **403** (or 503) from Hostinger means its web server
+has no running app to pass requests to: the app crashed, never started, or the
+domain points at a folder instead of the Node app.
 
-Use these deployment settings:
+**Managed Node.js web app (Business / Cloud plans)**
 
 | Setting | Value |
 |---|---|
@@ -98,24 +98,34 @@ Use these deployment settings:
 | Node version | `22.x` |
 | Package manager | pnpm |
 | Build command | None |
-| Output directory | `.` |
 | Entry file | `scripts/start-api.js` |
 
-Set `API_STARTUP_PROXY=true`, `PORT=3000`, and `NODE_ENV=production`, along with
-the database, bus, authentication, and other API variables above. Save and redeploy
-the commit containing the proxy. The gateway uses internal port 4000; all child
-services bind to loopback. The startup proxy runs in the existing parent process,
-so it does not add a process.
+Environment: `NODE_ENV=production`, `PORT=3000`, `API_STARTUP_PROXY=true`
+(answers within Hostinger's 3-second start check while the services load), the
+database, bus and auth variables above, and `STORAGE_ROOT` pointing outside the
+app folder (e.g. `/home/<user>/nexus-files`), because each deploy replaces it.
+Attach the API's domain/subdomain **to this Node.js app**, not to a website
+folder. Redeploy, then open `https://<api-domain>/healthz`: it should answer
+JSON `{"status":"ok"…}` within about 10 seconds.
 
-Check `/healthz` for the gateway's JSON response after startup. Once it works,
-set Vercel's `API_URL` to this API's HTTPS origin and redeploy Vercel.
+**Hostinger VPS** (any Linux server works the same way)
 
-This mode fixes the listen deadline, **not resource limits**. An `EAGAIN` spawn
-error means the host refused a new process. Check Max processes, memory, and
-the account's process/thread limits with Hostinger support. If the plan cannot
-run all 15 services, use a VPS with the existing Dockerfile or a container host.
-Also configure persistent document storage before accepting uploads; a managed
-deployment's release directory is not a durable uploads volume.
+```bash
+git clone <repo> nexus && cd nexus && corepack enable
+pnpm install --prod --frozen-lockfile --filter "./packages/*" --filter "./services/*"
+cp .env.example .env   # fill in the production values
+npx pm2 start scripts/start-api.js --name nexus-api && npx pm2 save
+```
+
+Or with Docker: `docker build -t nexus-api . && docker run -d --env-file .env
+-p 8080:8080 -v nexus-files:/app/services/documents/.data nexus-api`. Put Nginx
+or Caddy in front for HTTPS and proxy to the port.
+
+**Where the API can and cannot run.** Railway, Render, Fly.io, a Hostinger VPS,
+Hostinger's managed Node.js apps or any Docker host can run it. Vercel cannot:
+its functions stop after each request, and the API keeps background work running
+(reminders, the event bus, email retries). Host the web app on Vercel and point
+its `API_URL` at wherever the API runs.
 
 ## 3. Vercel — the web app
 
