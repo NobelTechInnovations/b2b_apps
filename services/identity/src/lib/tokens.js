@@ -55,7 +55,19 @@ export function cookieOptions(config, { maxAge, path = '/' } = {}) {
   };
 }
 
+/**
+ * With COOKIE_DOMAIN set, also delete any copy saved for this exact host
+ * (from a time it was not set). Browsers send both and the stale one first.
+ */
+function clearHostOnly(reply, config) {
+  if (!config.cookieDomain) return;
+  const options = { httpOnly: true, secure: config.cookieSecure, sameSite: 'lax' };
+  reply.clearCookie('nx_at', { ...options, path: '/' });
+  reply.clearCookie('nx_rt', { ...options, path: config.refreshCookiePath });
+}
+
 export function setAuthCookies(reply, config, { accessToken, refreshToken }) {
+  clearHostOnly(reply, config);
   reply.setCookie('nx_at', accessToken, cookieOptions(config, { maxAge: config.accessTokenTtl }));
   if (refreshToken) {
     reply.setCookie(
@@ -70,6 +82,7 @@ export function setAuthCookies(reply, config, { accessToken, refreshToken }) {
 }
 
 export function clearAuthCookies(reply, config) {
+  clearHostOnly(reply, config);
   reply.clearCookie('nx_at', cookieOptions(config));
   reply.clearCookie('nx_rt', cookieOptions(config, { path: config.refreshCookiePath }));
 }

@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createLocalJWKSet, createRemoteJWKSet, jwtVerify } from 'jose';
 import { inProcess } from './in-process.js';
+import { cookieValues } from './cookies.js';
 import fp from 'fastify-plugin';
 import { unauthorized, forbidden } from './errors.js';
 
@@ -69,10 +70,16 @@ export function authPlugin({ jwksUrl, issuer, audience = 'nexus', serviceToken, 
     /** Requires a signed-in user. Org context is optional here. */
     app.decorate('authenticate', async (request) => {
       const header = request.headers.authorization;
-      const token = header?.startsWith('Bearer ') ? header.slice(7) : request.cookies?.nx_at;
-      if (!token) throw unauthorized();
+      const tokens = header?.startsWith('Bearer ') ? [header.slice(7)] : cookieValues(request, 'nx_at');
+      if (!tokens.length) throw unauthorized();
 
-      const claims = await verifyToken(token);
+      // With duplicate cookies, the first one that verifies is the live one.
+      let claims = null;
+      let failure = null;
+      for (const token of tokens) {
+        try { claims = await verifyToken(token); break; } catch (error) { failure = error; }
+      }
+      if (!claims) throw failure;
       // Check the session on every authenticated request: clearing browser cookies
       // alone does not revoke a copied JWT. Identity failure must fail closed.
       let active;

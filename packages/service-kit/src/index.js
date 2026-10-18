@@ -1,4 +1,5 @@
 export { createService, startService } from './service.js';
+export { cookieValues } from './cookies.js';
 export { inProcess, forwardLocal, installLocalFetch } from './in-process.js';
 export { defineConfig, env } from './config.js';
 export { ApiError, badRequest, unauthorized, forbidden, notFound, conflict, tooMany, errorHandler } from './errors.js';

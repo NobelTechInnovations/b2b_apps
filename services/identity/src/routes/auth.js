@@ -1,5 +1,5 @@
 import { id } from '@nexus/db-kit';
-import { badRequest, conflict, unauthorized, forbidden, notFound } from '@nexus/service-kit';
+import { badRequest, conflict, unauthorized, forbidden, notFound, cookieValues } from '@nexus/service-kit';
 import { body, validate as v } from '@nexus/service-kit';
 import { EVENTS } from '@nexus/contracts/events';
 import { hashPassword, verifyPassword, checkPasswordStrength, generateToken, hashToken } from '../lib/password.js';
@@ -280,8 +280,20 @@ export async function authRoutes(app) {
       config: { rateLimit: { max: 120, timeWindow: '15 minutes' } },
     },
     async (request, reply) => {
-      const presented = request.body?.refresh_token ?? request.cookies?.nx_rt;
-      if (!presented) throw unauthorized('No session to refresh.');
+      const candidates = request.body?.refresh_token ? [request.body.refresh_token] : cookieValues(request, 'nx_rt');
+      if (!candidates.length) throw unauthorized('No session to refresh.');
+      // Two refresh cookies (one for this host, one for the domain): use the
+      // one that is still a live session. Presenting an old, already-rotated
+      // one would look like a stolen token and sign the person out everywhere.
+      let presented = candidates.at(-1);
+      if (candidates.length > 1) {
+        const hashes = candidates.map(hashToken);
+        const live = await db.one(
+          `SELECT refresh_hash FROM sessions WHERE refresh_hash = ANY($1) AND revoked_at IS NULL AND expires_at > now() LIMIT 1`,
+          [hashes],
+        );
+        if (live) presented = candidates[hashes.indexOf(live.refresh_hash)];
+      }
 
       const result = await rotateSession(db, { presented, config, request });
 
