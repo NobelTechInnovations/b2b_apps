@@ -19,6 +19,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import net from 'node:net';
 import { SERVICES, loadRootEnv, serviceEnv } from './lib/services.js';
 import { createStartupProxy } from './lib/startup-proxy.js';
 
@@ -157,6 +158,25 @@ async function startInProcess() {
   process.chdir(ROOT);
   for (const key of Object.keys(process.env)) if (!(key in base)) delete process.env[key];
   Object.assign(process.env, base);
+  await checkPorts();
+}
+
+/** Can each service be reached on its port? Shown on the startup page. */
+async function checkPorts() {
+  startup.node = process.version;
+  startup.ports = {};
+  for (const service of order) {
+    const port = Number(service.name === 'gateway' ? gatewayPort : service.port);
+    startup.ports[service.name] = await new Promise((resolve) => {
+      const socket = net.connect({ host: '127.0.0.1', port });
+      const done = (result) => { socket.destroy(); resolve(result); };
+      socket.once('connect', () => done(`ok :${port}`));
+      socket.once('error', (error) => done(`${error.code ?? 'error'} :${port}`));
+      socket.setTimeout(3000, () => done(`timeout :${port}`));
+    });
+  }
+  const failing = Object.entries(startup.ports).filter(([, result]) => !result.startsWith('ok'));
+  console.log(failing.length ? `! unreachable: ${failing.map(([name, result]) => `${name} ${result}`).join(', ')}` : '✓ every service answers on its port');
 }
 
 if (proxyEnabled) {

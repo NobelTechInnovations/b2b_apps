@@ -15,6 +15,12 @@ function forwardedHeaders(headers) {
 export function createStartupProxy({ gatewayPort, status = () => null }) {
   let gatewayError = null;
   const server = http.createServer((request, response) => {
+    // Same process: give the request to the gateway itself; no port involved.
+    const gateway = globalThis.__nexusServers?.gateway;
+    if (gateway) {
+      gateway.emit('request', request, response);
+      return;
+    }
     const upstream = http.request({
       hostname: '127.0.0.1',
       port: gatewayPort,
@@ -22,6 +28,7 @@ export function createStartupProxy({ gatewayPort, status = () => null }) {
       path: request.url,
       headers: forwardedHeaders(request.headers),
     }, (incoming) => {
+      gatewayError = null;
       response.writeHead(incoming.statusCode, forwardedHeaders(incoming.headers));
       incoming.on('error', () => response.destroy());
       response.on('close', () => incoming.destroy());

@@ -217,8 +217,14 @@ export async function startService(app, { port, host = process.env.SERVICE_BIND_
     app.log.error({ err: reason }, 'unhandled rejection');
   });
 
-  if (listenIsHijacked()) await listenDirectly(app, { port, host });
+  const direct = listenIsHijacked();
+  if (direct) await listenDirectly(app, { port, host });
   else await app.listen({ port, host });
+  const bound = net.Server.prototype.address.call(app.server);
+  console.log(`${name}: ${direct ? 'direct' : 'normal'} listen, bound to ${JSON.stringify(bound)}`);
+  // With every service in one process, the startup proxy can hand requests to
+  // the gateway directly instead of over a port.
+  (globalThis.__nexusServers ??= {})[name] = app.server;
   app.log.info(`${name} listening on http://localhost:${port}`);
   return app;
 }
