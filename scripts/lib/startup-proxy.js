@@ -13,6 +13,7 @@ function forwardedHeaders(headers) {
 
 /** The hosting entry process must listen before the service processes finish booting. */
 export function createStartupProxy({ gatewayPort, status = () => null }) {
+  let gatewayError = null;
   const server = http.createServer((request, response) => {
     const upstream = http.request({
       hostname: '127.0.0.1',
@@ -27,7 +28,8 @@ export function createStartupProxy({ gatewayPort, status = () => null }) {
       incoming.pipe(response);
     });
 
-    upstream.on('error', () => {
+    upstream.on('error', (error) => {
+      gatewayError = error.code ?? 'error';
       if (response.destroyed) return;
       if (response.headersSent) {
         response.destroy();
@@ -45,6 +47,7 @@ export function createStartupProxy({ gatewayPort, status = () => null }) {
           // Which service is starting or failed, and a short reason — never
           // settings or credentials — so a failed start can be read remotely.
           startup: status(),
+          gateway_error: gatewayError,
         },
       }));
     });

@@ -162,13 +162,30 @@ export async function createService({
 }
 
 /** Boot with graceful shutdown wired up. */
+/**
+ * Hostinger's Node runtime (LiteSpeed) replaces listen() on http and net
+ * servers: every server in the process is moved onto its own socket, so no
+ * internal port ever opens. Our services must reach each other on loopback
+ * ports, so there they open them through Node's lower-level listen routine,
+ * which that replacement does not touch.
+ */
+function listenIsHijacked() {
+  return Object.hasOwn(http.Server.prototype, 'listen') || !/listenInCluster/.test(net.Server.prototype.listen.toString());
+}
+
+async function listenDirectly(app, { port, host }) {
+  await app.ready();
+  const server = app.server;
+  if (typeof server._listen2 !== 'function') throw new Error('This Node.js cannot open internal ports here; use Node 22.');
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+    server._listen2(host, Number(port), net.isIPv6(host) ? 6 : 4, 511);
+  });
+}
+
 export async function startService(app, { port, host = process.env.SERVICE_BIND_HOST ?? '0.0.0.0', name }) {
   let closing = false;
-  // Hostinger's Node runtime replaces http.Server's listen() so that only the
-  // first server in a process gets a port (later calls are silently ignored).
-  // With every service in one process, each must open its own internal port,
-  // so it uses Node's own listen, which that replacement does not touch.
-  if (Object.hasOwn(http.Server.prototype, 'listen')) app.server.listen = net.Server.prototype.listen;
 
   const close = async (signal) => {
     if (closing) return;
@@ -200,7 +217,8 @@ export async function startService(app, { port, host = process.env.SERVICE_BIND_
     app.log.error({ err: reason }, 'unhandled rejection');
   });
 
-  await app.listen({ port, host });
+  if (listenIsHijacked()) await listenDirectly(app, { port, host });
+  else await app.listen({ port, host });
   app.log.info(`${name} listening on http://localhost:${port}`);
   return app;
 }
