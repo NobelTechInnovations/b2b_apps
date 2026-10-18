@@ -12,6 +12,7 @@ import { errorHandler } from './errors.js';
 import { authPlugin } from './auth.js';
 import { platformContext } from './guards.js';
 import { registerCapabilities } from './capabilities.js';
+import { inProcess, installLocalFetch, registerLocalApp } from './in-process.js';
 
 /**
  * Every Nexus service is created here. Identical middleware, identical error
@@ -217,11 +218,19 @@ export async function startService(app, { port, host = process.env.SERVICE_BIND_
     app.log.error({ err: reason }, 'unhandled rejection');
   });
 
-  const direct = listenIsHijacked();
-  if (direct) await listenDirectly(app, { port, host });
-  else await app.listen({ port, host });
-  const bound = net.Server.prototype.address.call(app.server);
-  console.log(`${name}: ${direct ? 'direct' : 'normal'} listen, bound to ${JSON.stringify(bound)}`);
+  if (inProcess()) {
+    // No port at all: other services and the gateway call this one in memory.
+    installLocalFetch();
+    await app.ready();
+    registerLocalApp(port, app);
+    console.log(`${name}: in process (port ${port} is an address only)`);
+  } else {
+    const direct = listenIsHijacked();
+    if (direct) await listenDirectly(app, { port, host });
+    else await app.listen({ port, host });
+    const bound = net.Server.prototype.address.call(app.server);
+    console.log(`${name}: ${direct ? 'direct' : 'normal'} listen, bound to ${JSON.stringify(bound)}`);
+  }
   // With every service in one process, the startup proxy can hand requests to
   // the gateway directly instead of over a port.
   (globalThis.__nexusServers ??= {})[name] = app.server;

@@ -1,4 +1,4 @@
-import { ApiError, forbidden, unauthorized, notFound, mcpRequestAllowed } from '@nexus/service-kit';
+import { ApiError, forbidden, unauthorized, notFound, mcpRequestAllowed, forwardLocal } from '@nexus/service-kit';
 import { appBySlug } from '@nexus/contracts';
 import { memberApps } from '../lib/authz.js';
 
@@ -64,6 +64,7 @@ export async function proxyRoutes(app) {
         // No session-cookie fallback on the agent endpoint.
         if (!request.headers.authorization?.startsWith('Bearer nx_mcp_')) throw unauthorized('Use a Nexus MCP connection token.');
       }
+      if (await forwardLocal(request, reply, `${upstream}${target}`, { ...stripInjected(request.headers), ...headers })) return reply;
       return reply.from(`${upstream}${target}`, {
         rewriteRequestHeaders: (req, original) => ({ ...stripInjected(original), ...headers }),
       });
@@ -77,6 +78,7 @@ export async function proxyRoutes(app) {
     headers['x-nexus-session'] = sessionId;
 
     if (!route.requiresOrg && !orgId) {
+      if (await forwardLocal(request, reply, `${upstream}${target}`, { ...stripInjected(request.headers), ...headers })) return reply;
       return reply.from(`${upstream}${target}`, {
         rewriteRequestHeaders: (req, original) => ({ ...stripInjected(original), ...headers }),
       });
@@ -154,7 +156,8 @@ export async function proxyRoutes(app) {
     headers['x-nexus-perms'] = effective.join(',');
     headers['x-nexus-apps'] = [...yourApps].join(',');
 
-    return reply.from(`${upstream}${target}`, {
+    if (await forwardLocal(request, reply, `${upstream}${target}`, { ...stripInjected(request.headers), ...headers })) return reply;
+      return reply.from(`${upstream}${target}`, {
       rewriteRequestHeaders: (req, original) => ({ ...stripInjected(original), ...headers }),
       onError: (rep, { error }) => {
         request.log.error({ err: error, service: route.service }, 'upstream request failed');

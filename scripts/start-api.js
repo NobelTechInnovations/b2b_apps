@@ -31,6 +31,9 @@ const gatewayPort = proxyEnabled ? String(SERVICES.find((s) => s.name === 'gatew
 const stagger = Number(base.STARTUP_STAGGER_MS ?? 1500);
 // One process unless asked otherwise: far less memory, and no process limits to hit.
 const single = (base.API_PROCESS_MODE ?? 'single') !== 'multi';
+// Hostinger (startup proxy + one process): no internal ports at all, the
+// services call each other in memory. Elsewhere they use loopback ports.
+if (single && proxyEnabled && base.API_INTERNAL_TRANSPORT !== 'tcp') base.NEXUS_IN_PROCESS = '1';
 const children = new Set();
 let proxy;
 // What the startup page reports while the gateway is not answering.
@@ -164,6 +167,7 @@ async function startInProcess() {
 /** Can each service be reached on its port? Shown on the startup page. */
 async function checkPorts() {
   startup.node = process.version;
+  if (base.NEXUS_IN_PROCESS === '1') { startup.transport = 'in-process'; console.log('✓ services connected in process'); return; }
   startup.ports = {};
   for (const service of order) {
     const port = Number(service.name === 'gateway' ? gatewayPort : service.port);

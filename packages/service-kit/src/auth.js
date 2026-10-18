@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createLocalJWKSet, createRemoteJWKSet, jwtVerify } from 'jose';
+import { inProcess } from './in-process.js';
 import fp from 'fastify-plugin';
 import { unauthorized, forbidden } from './errors.js';
 
@@ -12,7 +13,7 @@ import { unauthorized, forbidden } from './errors.js';
  *   request.auth = { userId, email, orgId, memberId, roles, sessionId, epoch }
  */
 export function authPlugin({ jwksUrl, issuer, audience = 'nexus', serviceToken, sessionDb, sessionCacheMs = Number(process.env.SESSION_CACHE_MS) || 0 }) {
-  const jwks = createRemoteJWKSet(new URL(jwksUrl), {
+  const jwks = inProcess() ? jwksOverFetch(jwksUrl) : createRemoteJWKSet(new URL(jwksUrl), {
     cooldownDuration: 30_000,
     cacheMaxAge: 600_000,
   });
@@ -148,4 +149,30 @@ export function authPlugin({ jwksUrl, issuer, audience = 'nexus', serviceToken, 
       }
     });
   }, { name: 'nexus-auth' });
+}
+
+/**
+ * Signing keys read with fetch(), so an in-process identity service answers
+ * without a network port (jose's remote key set opens its own connection).
+ * Keys are kept ten minutes, and fetched again when a token names a new one.
+ */
+function jwksOverFetch(jwksUrl) {
+  let keys = null;
+  let loadedAt = 0;
+  const load = async () => {
+    const response = await fetch(jwksUrl, { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) throw new Error(`signing keys unavailable (${response.status})`);
+    keys = createLocalJWKSet(await response.json());
+    loadedAt = Date.now();
+  };
+  return async (header, token) => {
+    if (!keys || Date.now() - loadedAt > 600_000) await load();
+    try {
+      return await keys(header, token);
+    } catch (error) {
+      if (Date.now() - loadedAt < 30_000) throw error;
+      await load();
+      return keys(header, token);
+    }
+  };
 }

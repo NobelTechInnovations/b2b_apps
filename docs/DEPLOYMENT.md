@@ -104,6 +104,9 @@ Environment: `NODE_ENV=production`, `PORT=3000`, `API_STARTUP_PROXY=true`
 (answers within Hostinger's 3-second start check while the services load), the
 database, bus and auth variables above, and `STORAGE_ROOT` pointing outside the
 app folder (e.g. `/home/<user>/nexus-files`), because each deploy replaces it.
+With the startup proxy on, the services also skip internal ports entirely and
+call each other in memory, because Hostinger refuses loopback connections
+between an app's own servers (`API_INTERNAL_TRANSPORT=tcp` turns this off).
 Attach the API's domain/subdomain **to this Node.js app**, not to a website
 folder. Redeploy, then open `https://<api-domain>/healthz`: it should answer
 JSON `{"status":"ok"…}` within about 10 seconds.
