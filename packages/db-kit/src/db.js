@@ -63,6 +63,12 @@ function connectionOptions(url) {
  * search_path is pinned per connection, so SQL stays unqualified and a service
  * still cannot see another service's tables without naming them outright.
  */
+/** Postgres or pooler saying "no free connections" (53300, 53400, Supavisor's limits). */
+export function isFull(error) {
+  return ['53300', '53400'].includes(error?.code)
+    || /remaining connection slots|too many clients|max client connections|max_client_conn|no more connections/i.test(String(error?.message ?? ''));
+}
+
 export function createDb({ url, max = 10, logger, appName = 'nexus', schema = process.env.DB_SCHEMA }) {
   if (!url) throw new Error('database url is required');
   if (schema && !SCHEMA_NAME.test(schema)) throw new Error(`invalid schema name: ${schema}`);
@@ -95,10 +101,32 @@ export function createDb({ url, max = 10, logger, appName = 'nexus', schema = pr
     pool.on('connect', (client) => client.query(`SET search_path TO "${schema}", public`).catch(() => {}));
   }
 
+  /**
+   * A full database ("remaining connection slots are reserved", too many
+   * clients) is a wait, not a crash: retry with backoff for up to two minutes.
+   * Crashing would restart the app, and every restart makes the pooler open
+   * more connections, so the database never empties.
+   */
+  async function whenSlotFree(operation) {
+    let delay = 1_000;
+    const deadline = Date.now() + 120_000;
+    for (;;) {
+      try {
+        return await operation();
+      } catch (error) {
+        if (!isFull(error) || Date.now() + delay > deadline) throw error;
+        logger?.warn({ retry_in_ms: delay }, 'database has no free connection slots; waiting');
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay = Math.min(delay * 2, 15_000);
+      }
+    }
+  }
+  const connect = () => whenSlotFree(() => pool.connect());
+
   async function query(text, params = []) {
     const started = process.hrtime.bigint();
     try {
-      const result = await pool.query(text, params);
+      const result = await whenSlotFree(() => pool.query(text, params));
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
       if (ms > 200) logger?.warn({ ms, sql: text.slice(0, 160) }, 'slow query');
       return result;
@@ -118,7 +146,7 @@ export function createDb({ url, max = 10, logger, appName = 'nexus', schema = pr
    * committing, and vice versa.
    */
   async function transaction(fn, { orgId } = {}) {
-    const client = await pool.connect();
+    const client = await connect();
     try {
       await client.query('BEGIN');
       // Row-level-security anchor: policies read this for tenant scoping.
@@ -158,6 +186,7 @@ export function createDb({ url, max = 10, logger, appName = 'nexus', schema = pr
 
   return {
     pool,
+    connect,
     schema: schema ?? null,
     query,
     rows,

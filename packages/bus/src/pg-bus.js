@@ -86,7 +86,7 @@ export async function createPgBus({ url, db: shared, name, logger = console, pol
   // Every process runs the DDL; a transaction-scoped advisory lock keeps
   // concurrent boots from racing on CREATE TABLE IF NOT EXISTS (not itself
   // race-free), and stays correct behind a transaction-mode pooler.
-  const client = await db.pool.connect();
+  const client = await (db.connect ? db.connect() : db.pool.connect());
   try {
     await client.query('BEGIN');
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('nexus-bus-schema'))`);

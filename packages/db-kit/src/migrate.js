@@ -22,7 +22,7 @@ const TRACKING_TABLE = `
  */
 export async function runMigrations({ db, dir, logger = console }) {
   const lockKey = `nexus-migrate:${db.schema ?? 'default'}`;
-  const client = await db.pool.connect();
+  const client = await (db.connect ? db.connect() : db.pool.connect());
 
   async function locked(fn) {
     await client.query('BEGIN');
