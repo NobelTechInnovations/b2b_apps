@@ -79,7 +79,7 @@ export async function createService({
 
   if (publicService) {
     await app.register(cors, {
-      origin: corsOptions?.origin ?? config.webOrigin ?? true,
+      origin: corsOptions?.origin ?? (config.webOrigin ? allowedOrigin(config.webOrigin) : true),
       credentials: true,
       exposedHeaders: ['x-request-id'],
       ...corsOptions,
@@ -163,6 +163,27 @@ export async function createService({
 }
 
 /** Boot with graceful shutdown wired up. */
+/**
+ * Browsers may call the API from the listed web origins, and — when the API
+ * has its own address (api.example.com) — from the root domain and any one
+ * company subdomain of ROOT_DOMAIN over HTTPS (acme.example.com). Lookalike
+ * domains (evil-example.com, a.b.example.com) are refused.
+ */
+function allowedOrigin(list) {
+  const listed = new Set([].concat(list).map((o) => String(o).trim()).filter(Boolean));
+  let root = null;
+  try { if (process.env.ROOT_DOMAIN) root = new URL(`https://${process.env.ROOT_DOMAIN}`).hostname; } catch { /* no root domain */ }
+  return (origin, callback) => {
+    if (!origin || listed.has(origin)) return callback(null, true);
+    let url;
+    try { url = new URL(origin); } catch { return callback(null, false); }
+    const host = url.hostname;
+    const company = root && url.protocol === 'https:' && !url.port
+      && (host === root || (host.endsWith(`.${root}`) && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host.slice(0, -root.length - 1))));
+    callback(null, Boolean(company));
+  };
+}
+
 /**
  * Hostinger's Node runtime (LiteSpeed) replaces listen() on http and net
  * servers: every server in the process is moved onto its own socket, so no
