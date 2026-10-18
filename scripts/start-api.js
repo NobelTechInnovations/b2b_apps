@@ -51,6 +51,13 @@ function reason(error) {
 let stopping = false;
 let exitCode = 0;
 
+// 16 services share one hosted database (Supabase allows about 60
+// connections). Without a cap each would open 10–20, so default to 2 each.
+if (!base.DB_POOL_MAX) {
+  base.DB_POOL_MAX = '2';
+  console.log('DB_POOL_MAX not set: using 2 connections per service');
+}
+
 for (const required of ['DATABASE_URL', 'SERVICE_TOKEN', 'COOKIE_SECRET']) {
   if (!base[required]) {
     console.error(`✖ ${required} is required`);
