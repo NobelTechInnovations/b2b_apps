@@ -34,11 +34,18 @@ await app.register(replyFrom, {
 app.removeAllContentTypeParsers();
 app.addContentTypeParser('*', (request, payload, done) => done(null, payload));
 
-// Per-user when we know who they are, per-IP otherwise.
+// Per signed-in user (from their verified token), per IP otherwise. Counting
+// by IP alone puts everyone behind one office connection or one hosting proxy
+// (Hostinger's CDN, Vercel) into a single shared allowance.
 await app.register(rateLimit, {
   max: config.rateLimitMax,
   timeWindow: '1 minute',
-  keyGenerator: (request) => request.auth?.userId ?? request.ip,
+  keyGenerator: async (request) => {
+    const header = request.headers.authorization;
+    const token = header?.startsWith('Bearer ') && !header.startsWith('Bearer nx_mcp_') ? header.slice(7) : request.cookies?.nx_at;
+    const claims = token ? await app.peekToken(token) : null;
+    return claims?.sub ? `user:${claims.sub}` : `ip:${request.ip}`;
+  },
   // Must be an Error carrying a status: the plugin hands this to the shared
   // error handler, and a plain object would be reported as an internal error.
   errorResponseBuilder: (request, context) =>
