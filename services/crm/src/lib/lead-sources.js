@@ -52,7 +52,22 @@ export function sheetCsvUrl(link) {
 const SHEET_HOSTS = (host) => host === 'docs.google.com' || host.endsWith('.googleusercontent.com');
 
 export async function fetchSheet(link) {
-  let url = sheetCsvUrl(link);
+  return parseCsv(await (await downloadSheet(sheetCsvUrl(link))).text());
+}
+
+/** The whole spreadsheet — every tab — as an .xlsx file. */
+export function sheetXlsxUrl(link) {
+  const csv = new URL(sheetCsvUrl(link));
+  if (csv.pathname.endsWith('/pub')) { csv.searchParams.set('output', 'xlsx'); csv.searchParams.delete('gid'); return csv.toString(); }
+  return `${csv.origin}${csv.pathname}?format=xlsx`;
+}
+
+export async function fetchSheetWorkbook(link) {
+  return Buffer.from(await (await downloadSheet(sheetXlsxUrl(link))).arrayBuffer());
+}
+
+async function downloadSheet(start) {
+  let url = start;
   for (let hop = 0; hop < 4; hop += 1) {
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(20_000) }).catch(() => null);
     if (!response) throw badRequest('Google Sheets did not answer. Try again in a minute.');
@@ -69,7 +84,7 @@ export async function fetchSheet(link) {
     if ((response.headers.get('content-type') ?? '').includes('text/html')) throw sheetIsPrivate();
     const length = Number(response.headers.get('content-length') ?? 0);
     if (length > 10 * 1024 * 1024) throw badRequest('That sheet is larger than 10 MB. Split it, or import it as CSV files.');
-    return parseCsv(await response.text());
+    return response;
   }
   throw badRequest('Google Sheets redirected too many times.');
 }

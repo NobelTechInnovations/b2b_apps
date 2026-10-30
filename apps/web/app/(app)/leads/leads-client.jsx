@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Plus, Upload, Users, Phone, MessageCircle, Tag, Trash2, BellRing, Sparkles, ChevronRight, Kanban, List } from 'lucide-react';
-import { api, ApiError } from '@/lib/api';
+import { Plus, Upload, Users, Phone, MessageCircle, Tag, Trash2, BellRing, Sparkles, ChevronRight, Kanban, List, Download } from 'lucide-react';
+import { api, ApiError, refreshSession } from '@/lib/api';
+import { API_BASE } from '@/lib/api-base';
 import { cn } from '@/lib/cn';
 import { relativeTime } from '@/lib/format';
 import { tintFor } from '@/lib/app-theme';
@@ -167,10 +168,40 @@ export default function LeadsClient() {
       { key: 'form', label: 'Form / source', options: (meta.forms ?? []).map((f) => ({ value: f.value, label: `${formName(f)} (${f.count})` })) },
       { key: 'source', label: 'Source type', options: (meta.sources ?? []).map((s) => ({ value: s, label: SOURCE_LABEL[s] ?? s })) },
       { key: 'outcome', label: 'Last call', options: Object.entries(OUTCOME_LABEL).map(([value, label]) => ({ value, label })) },
-      { key: 'created', label: 'Added', options: [{ value: 'today', label: 'Today' }, { value: 'week', label: 'Last 7 days' }, { value: 'month', label: 'Last 30 days' }] },
+      { key: 'created', label: 'Added', options: [{ value: 'today', label: 'Today' }, { value: 'yesterday', label: 'Yesterday' }, { value: 'week', label: 'Last 7 days' }, { value: 'month', label: 'Last 30 days' }] },
+      // Who was worked on when: calls and finished follow-ups in a period.
+      { key: 'called', label: 'Called', options: [{ value: 'today', label: 'Today' }, { value: 'yesterday', label: 'Yesterday' }, { value: 'week', label: 'Last 7 days' }, { value: 'month', label: 'This month' }, { value: 'never', label: 'Never called' }] },
+      { key: 'followup_done', label: 'Follow-up done', options: [{ value: 'today', label: 'Today' }, { value: 'yesterday', label: 'Yesterday' }, { value: 'week', label: 'Last 7 days' }, { value: 'month', label: 'This month' }] },
+      { key: 'idle_days', label: 'Not called for', options: [{ value: '3', label: '3+ days' }, { value: '7', label: '7+ days' }, { value: '14', label: '14+ days' }, { value: '30', label: '30+ days' }] },
     );
+    if (meta.sees_all) {
+      list.push({ key: 'called_by', label: 'Called by', options: [{ value: 'me', label: 'Me' }, ...(meta.team ?? []).map((m) => ({ value: m.user_id, label: m.name ?? m.email }))] });
+    }
     return list;
   }, [meta]);
+
+  // The leads in this view, with their whole follow-up history, as one Excel file.
+  const [exporting, setExporting] = useState(false);
+  async function exportLeads() {
+    setExporting(true);
+    try {
+      const qs = new URLSearchParams(Object.entries(baseQuery).filter(([, v]) => v !== undefined && v !== '' && v !== null).map(([k, v]) => [k, String(v)]));
+      const url = `${API_BASE}/api/leads/leads/export.xlsx?${qs}`;
+      let response = await fetch(url, { credentials: 'include' });
+      if (response.status === 401 && await refreshSession()) response = await fetch(url, { credentials: 'include' });
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.error?.message ?? 'Could not export.');
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(await response.blob());
+      link.download = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? 'leads.xlsx';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+      toast.success('Export ready', { description: 'Leads with their calls and follow-ups, in one Excel file.' });
+    } catch (err) {
+      toast.error('Could not export', { description: err.message });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   async function bulk(action, extra = {}) {
     try {
@@ -209,6 +240,9 @@ export default function LeadsClient() {
         description={meta?.sees_all ? 'Every lead in the workspace, and who is calling them.' : 'The leads assigned or handed over to you.'}
         actions={
           <div className="flex gap-2">
+            <Can permission="leads.leads.export">
+              <Button variant="secondary" icon={Download} loading={exporting} onClick={exportLeads}>Export</Button>
+            </Can>
             <Can permission="leads.leads.import">
               <Link href="/leads/import"><Button variant="secondary" icon={Upload}>Import</Button></Link>
             </Can>

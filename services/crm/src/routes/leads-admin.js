@@ -5,7 +5,8 @@ import {
 } from '@nexus/service-kit';
 import { FIELD_TYPES, STANDARD_FIELDS, activeFields, ensureStages, fieldKey, suggestMapping } from '../lib/lead-fields.js';
 import { MAX_IMPORT_ROWS, intakeLeads, parseCsv, recordImport } from '../lib/lead-intake.js';
-import { fetchSheet, inspectMetaPage, sealSecret, syncSource, sheetCsvUrl, startSourceSync } from '../lib/lead-sources.js';
+import { fetchSheet, fetchSheetWorkbook, inspectMetaPage, sealSecret, syncSource, sheetCsvUrl, startSourceSync } from '../lib/lead-sources.js';
+import { importWorkbook, loadWorkbook, planWorkbook, readTabs } from '../lib/lead-workbook.js';
 
 const COLORS = ['slate', 'blue', 'sky', 'cyan', 'teal', 'emerald', 'lime', 'amber', 'orange', 'rose', 'pink', 'violet', 'indigo'];
 const TARGET = { type: 'string', pattern: '^(skip|full_name|first_name|last_name|phone|email|company_name|job_title|city|estimated_value|rating|notes|tags|owner_email|stage|custom\\.[a-z][a-z0-9_]{0,39})$' };
@@ -262,6 +263,104 @@ export async function leadsAdminRoutes(app) {
     return reply.status(201).send({
       data: { id: record?.id ?? null, source_id: source?.id ?? null, total: result.total, created: result.created, duplicates: result.duplicates, failed: result.failed, errors: result.errors },
     });
+  });
+
+  // ═══════════════════════════════════════════════════════ EXCEL WORKBOOKS
+  // A whole workbook: leads, their follow-ups and the dropdown lists, with
+  // fields created from its columns. Preview first; nothing is written then.
+  const workbookSource = {
+    file_base64: { type: 'string', maxLength: 14_000_000 },
+    file_name: v.text(200),
+    sheet_url: v.text(1000),
+  };
+  async function readWorkbook(b) {
+    if (b.sheet_url) return readTabs(await loadWorkbook(await fetchSheetWorkbook(b.sheet_url)));
+    if (!b.file_base64) throw badRequest('Choose an Excel file (.xlsx) or paste a Google Sheet link.');
+    const bytes = Buffer.from(b.file_base64.replace(/^data:[^,]*,/, ''), 'base64');
+    if (bytes.length > 10 * 1024 * 1024) throw badRequest('That file is larger than 10 MB. Split it into smaller files.');
+    return readTabs(await loadWorkbook(bytes));
+  }
+  const fileLabel = (b) => (b.file_name ?? '').replace(/\.xlsx?$/i, '').trim() || (b.sheet_url ? 'Google Sheet' : 'Workbook');
+
+  app.post('/leads/import/workbook/preview', {
+    preHandler: guard('leads.leads.import'), bodyLimit: 15 * 1024 * 1024,
+    schema: { body: body(workbookSource) },
+  }, async (request) => {
+    const tabs = await readWorkbook(request.body);
+    const plan = await planWorkbook(db, request.ctx.orgId, tabs);
+    const leadsTab = tabs.find((t) => t.name === plan.leads.tab);
+    const followTab = plan.followups ? tabs.find((t) => t.name === plan.followups.tab) : null;
+    return {
+      data: {
+        ...plan,
+        name: fileLabel(request.body),
+        sample: leadsTab.rows.slice(0, 3),
+        followup_sample: followTab?.rows.slice(0, 3) ?? [],
+        targets: [...STANDARD_FIELDS, ...(await activeFields(db, request.ctx.orgId)).map((f) => ({ key: `custom.${f.key}`, label: f.label }))],
+        field_types: FIELD_TYPES,
+        can_create_fields: request.ctx.can('leads.settings.manage'),
+      },
+    };
+  });
+
+  const columnChoice = body({
+    header: v.text(300),
+    action: v.enum(['map', 'create', 'skip']),
+    target: { type: 'string', maxLength: 60 },
+    type: v.enum(FIELD_TYPES),
+    label: v.text(80, 1),
+  }, ['header', 'action']);
+
+  app.post('/leads/import/workbook', {
+    preHandler: guard('leads.leads.import'), bodyLimit: 15 * 1024 * 1024,
+    schema: {
+      body: body({
+        ...workbookSource,
+        name: v.text(160),
+        columns: { type: 'array', items: columnChoice, maxItems: 300 },
+        owner_user_id: nullable(v.id('usr')),
+        assign_to: { type: 'array', items: v.id('usr'), maxItems: 100 },
+        skip_followups: v.bool,
+      }),
+    },
+  }, async (request, reply) => {
+    const { orgId, userId } = request.ctx;
+    const b = request.body;
+    await assertTeam(orgId, [b.owner_user_id, ...(b.assign_to ?? [])]);
+    const tabs = await readWorkbook(b);
+    // The plan is made again here from the file itself; the person's choices
+    // only change what happens to each column.
+    const plan = await planWorkbook(db, orgId, tabs);
+    const fields = new Set((await activeFields(db, orgId)).map((f) => `custom.${f.key}`));
+    for (const choice of b.columns ?? []) {
+      const column = plan.leads.columns.find((c) => c.header === choice.header);
+      if (!column) continue;
+      if (choice.action === 'skip') column.action = 'skip';
+      else if (choice.action === 'map') {
+        const known = STANDARD_FIELDS.some((f) => f.key === choice.target) || fields.has(choice.target);
+        if (!known) throw badRequest(`Choose where “${choice.header}” goes.`);
+        Object.assign(column, { action: 'map', target: choice.target });
+        if (choice.target !== 'stage') delete column.new_stages;
+      } else if (choice.action === 'create') {
+        Object.assign(column, { action: 'create', type: choice.type ?? column.type ?? 'text', label: choice.label ?? column.label ?? choice.header });
+        column.target ??= `custom.${fieldKey(choice.header)}`;
+        if (['select', 'multi_select'].includes(column.type) && !column.options?.length) column.type = 'text';
+      }
+    }
+    const targets = plan.leads.columns.filter((c) => c.action === 'map').map((c) => c.target);
+    const twice = targets.find((t, i) => targets.indexOf(t) !== i);
+    if (twice) throw badRequest(`Two columns are going into the same field (${twice.replace('custom.', '')}). Pick one.`);
+    const creates = plan.leads.columns.some((c) => c.action === 'create' || c.new_stages?.length);
+    if (creates && !request.ctx.can('leads.settings.manage')) {
+      throw badRequest('Creating new fields or stages needs the “Lead sources, fields and stages” ability. Ask an owner, or skip those columns.');
+    }
+    if (b.skip_followups) plan.followups = null;
+
+    const result = await importWorkbook(db, {
+      orgId, actorId: userId, tabs, plan, name: b.name?.trim() || fileLabel(b),
+      team: await team(orgId), ownerId: b.owner_user_id ?? null, assignTo: b.assign_to ?? [],
+    });
+    return reply.status(201).send({ data: result });
   });
 
   app.get('/leads/imports', { preHandler: guard('leads.leads.import') }, async (request) => {

@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs';
 import { id } from '@nexus/db-kit';
 import {
   body, params, query, validate as v, requireApp, requirePermission, badRequest, notFound, forbidden, conflict,
@@ -227,7 +228,17 @@ export async function leadsAppRoutes(app) {
     outcome: v.enum(Object.keys(OUTCOMES)),
     fresh: v.bool,
     rating: v.enum(['hot', 'warm', 'cold']),
-    created: v.enum(['today', 'week', 'month']),
+    created: v.enum(['today', 'yesterday', 'week', 'month']),
+    created_from: v.date,
+    created_to: v.date,
+    // Calls logged on the lead: in a period, or a date range, optionally by one person.
+    called: v.enum(['today', 'yesterday', 'week', 'month', 'never']),
+    called_from: v.date,
+    called_to: v.date,
+    called_by: { type: 'string', pattern: '^(me|usr_[0-9a-hjkmnp-tv-z]{26})$' },
+    followup_done: v.enum(['today', 'yesterday', 'week', 'month']),
+    // Not called for at least this many days (or never).
+    idle_days: v.int(1, 365),
     tag: v.text(40),
     // A group's own leads: a city by name, or `none` for leads without one.
     city: v.text(80),
@@ -269,6 +280,39 @@ export async function leadsAppRoutes(app) {
     if (qs.followup === 'today') where.push(`(l.next_followup_at AT TIME ZONE $2)::date = ${TODAY}`);
     if (qs.followup === 'upcoming') where.push(`(l.next_followup_at AT TIME ZONE $2)::date > ${TODAY}`);
     if (qs.followup === 'none') where.push('l.next_followup_at IS NULL');
+    // Whole days in the viewer's time zone: [start of a day, start of another).
+    const dayStart = (offset) => `((${TODAY} + (${offset}))::timestamp AT TIME ZONE $2)`;
+    const PERIOD = {
+      today: [dayStart(0), dayStart(1)],
+      yesterday: [dayStart(-1), dayStart(0)],
+      week: [dayStart(-6), dayStart(1)],
+      month: [`(date_trunc('month', now() AT TIME ZONE $2) AT TIME ZONE $2)`, dayStart(1)],
+    };
+    const dateRange = (fromValue, toValue) => {
+      const parts = [];
+      if (fromValue) { values.push(fromValue); parts.push(`($${values.length}::date::timestamp AT TIME ZONE $2)`); } else parts.push(`'-infinity'::timestamptz`);
+      if (toValue) { values.push(toValue); parts.push(`(($${values.length}::date + 1)::timestamp AT TIME ZONE $2)`); } else parts.push(`'infinity'::timestamptz`);
+      return parts;
+    };
+    if (qs.created === 'yesterday') where.push(`l.created_at >= ${PERIOD.yesterday[0]} AND l.created_at < ${PERIOD.yesterday[1]}`);
+    if (qs.created_from || qs.created_to) {
+      const [from, to] = dateRange(qs.created_from, qs.created_to);
+      where.push(`l.created_at >= ${from} AND l.created_at < ${to}`);
+    }
+    if (qs.called === 'never') where.push('l.call_count = 0');
+    else if (qs.called || qs.called_from || qs.called_to || qs.called_by) {
+      const [from, to] = qs.called ? PERIOD[qs.called] : (qs.called_from || qs.called_to ? dateRange(qs.called_from, qs.called_to) : [`'-infinity'::timestamptz`, `'infinity'::timestamptz`]);
+      let by = '';
+      if (qs.called_by) { values.push(qs.called_by === 'me' ? userId : qs.called_by); by = ` AND a.created_by = $${values.length}`; }
+      where.push(`EXISTS (SELECT 1 FROM activities a WHERE a.org_id = l.org_id AND a.related_type = 'lead' AND a.related_id = l.id
+                    AND a.kind = 'call' AND a.due_at IS NULL AND a.completed_at >= ${from} AND a.completed_at < ${to}${by})`);
+    }
+    if (qs.followup_done) {
+      const [from, to] = PERIOD[qs.followup_done];
+      where.push(`EXISTS (SELECT 1 FROM activities a WHERE a.org_id = l.org_id AND a.related_type = 'lead' AND a.related_id = l.id
+                    AND a.due_at IS NOT NULL AND a.canceled_at IS NULL AND a.completed_at >= ${from} AND a.completed_at < ${to})`);
+    }
+    if (qs.idle_days) { values.push(qs.idle_days); where.push(`(l.last_call_at IS NULL OR l.last_call_at < now() - ($${values.length}::int * interval '1 day'))`); }
     if (qs.created === 'today') where.push(`(l.created_at AT TIME ZONE $2)::date = ${TODAY}`);
     if (qs.created === 'week') where.push(`l.created_at > now() - interval '7 days'`);
     if (qs.created === 'month') where.push(`l.created_at > now() - interval '30 days'`);
@@ -283,6 +327,123 @@ export async function leadsAppRoutes(app) {
     }
     return { values, clause: where.join(' AND '), stages, first };
   }
+
+  // ═════════════════════════════════════════════════════════════════ EXPORT
+  /**
+   * The leads in the current view as one Excel file: a Leads sheet (every
+   * field, plus calls, last result, next follow-up and the history in one
+   * cell) and a Calls & follow-ups sheet with one row per entry.
+   */
+  app.get('/leads/leads/export.xlsx', { preHandler: guard('leads.leads.export'), schema: { querystring: query(listQuery) } }, async (request, reply) => {
+    const { orgId } = request.ctx;
+    const tz = tzOf(request);
+    const { values, clause } = await listFilter(request);
+    const leads = await db.rows(
+      `SELECT l.*, s.name AS stage_name FROM ${FROM} WHERE ${clause}
+        ORDER BY ${SORTS[request.query.view ?? 'recent']} LIMIT 20000`,
+      values,
+    );
+    const ids = leads.map((l) => l.id);
+    const [fields, timeline] = await Promise.all([
+      activeFields(db, orgId),
+      ids.length ? db.rows(
+        `SELECT related_id, kind, subject, body, outcome, due_at, completed_at, canceled_at, created_by, assigned_to, created_at
+           FROM activities WHERE org_id = $1 AND related_type = 'lead' AND related_id = ANY($2)
+            AND (kind <> 'update' OR body IS NOT NULL)
+          ORDER BY COALESCE(completed_at, due_at, created_at) DESC LIMIT 200000`,
+        [orgId, ids],
+      ) : [],
+    ]);
+    const names = await people.lookup([...leads.map((l) => l.owner_user_id), ...timeline.flatMap((a) => [a.created_by, a.assigned_to])]);
+    const who = (userId) => (userId ? names.get(userId)?.name ?? 'Former member' : '');
+    // Excel has no time zones: write each moment as the viewer's wall-clock time.
+    const offsetOf = (date) => {
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        .formatToParts(date).map((p) => [p.type, p.value]));
+      return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - date.getTime();
+    };
+    const local = (value) => { if (!value) return null; const d = new Date(value); return new Date(d.getTime() + offsetOf(d)); };
+    const short = (value) => {
+      const d = local(value);
+      return d ? d.toISOString().slice(0, 16).replace('T', ' ') : '';
+    };
+    const byLead = new Map();
+    for (const a of timeline) {
+      if (!byLead.has(a.related_id)) byLead.set(a.related_id, []);
+      byLead.get(a.related_id).push(a);
+    }
+    const status = (a) => (a.canceled_at ? 'Cancelled' : a.completed_at ? 'Done' : a.due_at && new Date(a.due_at) < new Date() ? 'Overdue' : 'Open');
+    const result = (a) => (a.outcome ? OUTCOMES[a.outcome] ?? a.outcome : '');
+
+    const book = new ExcelJS.Workbook();
+    book.creator = 'Nexus';
+    const sheet = book.addWorksheet('Leads', { views: [{ state: 'frozen', ySplit: 1 }] });
+    sheet.columns = [
+      { header: 'Name', key: 'name', width: 24 }, { header: 'Phone', key: 'phone', width: 16 }, { header: 'Email', key: 'email', width: 26 },
+      { header: 'Company', key: 'company', width: 20 }, { header: 'City', key: 'city', width: 14 }, { header: 'Stage', key: 'stage', width: 14 },
+      { header: 'Owner', key: 'owner', width: 18 }, { header: 'Source', key: 'source', width: 14 }, { header: 'Form / source', key: 'form', width: 24 },
+      { header: 'Tags', key: 'tags', width: 18 }, { header: 'Added on', key: 'added', width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } },
+      { header: 'Calls', key: 'calls', width: 8 }, { header: 'Last call', key: 'last_call', width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } },
+      { header: 'Last call result', key: 'last_result', width: 20 }, { header: 'Next follow-up', key: 'next', width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } },
+      { header: 'Follow-ups done', key: 'done', width: 10 }, { header: 'Open follow-ups', key: 'open', width: 10 },
+      ...fields.map((f) => ({ header: f.label, key: `custom_${f.key}`, width: Math.min(30, Math.max(12, f.label.length + 2)) })),
+      { header: 'Notes', key: 'notes', width: 40 }, { header: 'Follow-up history', key: 'history', width: 70 },
+    ];
+    for (const l of leads) {
+      const entries = byLead.get(l.id) ?? [];
+      const history = entries.slice(0, 50).map((a) => {
+        const when = short(a.completed_at ?? a.due_at ?? a.created_at);
+        const label = a.due_at && !a.completed_at ? `${status(a)} (due)` : a.subject;
+        return [when, label, result(a) && a.kind === 'call' && !a.subject.includes(result(a)) ? result(a) : '', who(a.created_by), a.body?.replace(/\s+/g, ' ').slice(0, 300)]
+          .filter(Boolean).join(' · ');
+      }).join('\n');
+      sheet.addRow({
+        name: [l.first_name, l.last_name].filter(Boolean).join(' '), phone: l.phone ?? '', email: l.email ?? '', company: l.company_name ?? '',
+        city: l.city ?? '', stage: l.stage_name ?? '', owner: who(l.owner_user_id), source: l.source ?? '', form: l.source_detail ?? '',
+        tags: (l.tags ?? []).join(', '), added: local(l.created_at), calls: l.call_count ?? 0, last_call: local(l.last_call_at),
+        last_result: l.last_call_outcome ? OUTCOMES[l.last_call_outcome] ?? l.last_call_outcome : '', next: local(l.next_followup_at),
+        done: entries.filter((a) => a.due_at && a.completed_at && !a.canceled_at).length,
+        open: entries.filter((a) => a.due_at && !a.completed_at && !a.canceled_at).length,
+        ...Object.fromEntries(fields.map((f) => {
+          const v = l.custom?.[f.key];
+          return [`custom_${f.key}`, Array.isArray(v) ? v.join(', ') : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : v ?? ''];
+        })),
+        notes: l.notes ?? '', history,
+      });
+    }
+    sheet.getRow(1).font = { bold: true };
+    sheet.getColumn('history').alignment = { wrapText: true, vertical: 'top' };
+    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: sheet.columns.length } };
+
+    const log = book.addWorksheet('Calls & follow-ups', { views: [{ state: 'frozen', ySplit: 1 }] });
+    log.columns = [
+      { header: 'Lead', key: 'lead', width: 24 }, { header: 'Phone', key: 'phone', width: 16 },
+      { header: 'Date', key: 'date', width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } }, { header: 'Type', key: 'type', width: 12 },
+      { header: 'What happened', key: 'subject', width: 30 }, { header: 'Result', key: 'result', width: 18 },
+      { header: 'By', key: 'by', width: 18 }, { header: 'For', key: 'for', width: 18 },
+      { header: 'Due', key: 'due', width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } }, { header: 'Status', key: 'status', width: 11 },
+      { header: 'Note', key: 'note', width: 60 },
+    ];
+    const leadById = new Map(leads.map((l) => [l.id, l]));
+    for (const a of timeline) {
+      const l = leadById.get(a.related_id);
+      log.addRow({
+        lead: [l?.first_name, l?.last_name].filter(Boolean).join(' '), phone: l?.phone ?? '', date: local(a.completed_at ?? a.created_at),
+        type: a.due_at ? 'Follow-up' : ({ call: 'Call', whatsapp: 'WhatsApp', email: 'Email', meeting: 'Meeting', visit: 'Visit', note: 'Note', update: 'Update', task: 'Task' }[a.kind] ?? a.kind),
+        subject: a.subject, result: result(a), by: who(a.created_by), for: who(a.assigned_to), due: local(a.due_at),
+        status: a.due_at ? status(a) : 'Done', note: a.body ?? '',
+      });
+    }
+    log.getRow(1).font = { bold: true };
+    log.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: log.columns.length } };
+
+    const file = Buffer.from(await book.xlsx.writeBuffer());
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
+    reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    reply.header('content-disposition', `attachment; filename="leads-${day}.xlsx"`);
+    reply.header('cache-control', 'no-store');
+    return reply.send(file);
+  });
 
   app.get('/leads/leads', { preHandler: guard('leads.leads.view'), schema: { querystring: query(listQuery) } }, async (request) => {
     const qs = request.query;

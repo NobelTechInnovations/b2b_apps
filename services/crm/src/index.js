@@ -17,6 +17,7 @@ import { marketingRoutes } from './routes/marketing.js';
 import { socialRoutes } from './routes/social.js';
 import { leadsAppRoutes } from './routes/leads-app.js';
 import { leadsAdminRoutes } from './routes/leads-admin.js';
+import { leadsReportRoutes } from './routes/leads-reports.js';
 import { leadHookRoutes } from './routes/lead-hooks.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -47,6 +48,7 @@ await app.register(socialRoutes);
 // The Leads app works the same leads table, for calling teams.
 await app.register(leadsAppRoutes);
 await app.register(leadsAdminRoutes);
+await app.register(leadsReportRoutes);
 await app.register(leadHookRoutes);
 
 if (bus) startOutboxRelay({ db, bus, logger: app.log });

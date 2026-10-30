@@ -13,6 +13,7 @@ import { Input, Field, Select, Checkbox } from '@/components/ui/input';
 import { Table, THead, TBody, TH, TR, TD } from '@/components/ui/table';
 import { Card, CardHeader, CardBody, PageHeader, Alert, Badge } from '@/components/ui/primitives';
 import { Chip, useLeadsMeta } from '@/components/leads/lead-kit';
+import { WorkbookChip, WorkbookImport } from '@/components/leads/workbook-import';
 
 const MAX_BYTES = 4 * 1024 * 1024;
 
@@ -46,7 +47,8 @@ export default function ImportClient() {
   async function readFile(file) {
     setProblem(null);
     if (!file) return;
-    if (/\.xlsx?$/i.test(file.name)) { setProblem('That is an Excel file. In Excel choose File → Save As → CSV (Comma delimited), then upload the .csv.'); return; }
+    // Excel files go to the workbook import, which reads every tab.
+    if (/\.xlsx?$/i.test(file.name)) { setMode('workbook'); setProblem(null); return; }
     if (file.size > MAX_BYTES) { setProblem('That file is larger than 4 MB. Split it into smaller files.'); return; }
     const text = await file.text();
     setCsv(text);
@@ -111,6 +113,15 @@ export default function ImportClient() {
   const hasContact = Object.values(mapping).some((t) => ['full_name', 'first_name', 'phone', 'email'].includes(t));
   const roundReady = assign !== 'round' || pool.length > 0;
 
+  // CSV, one Google Sheet tab, or a whole workbook (every tab, fields made automatically).
+  const modeSwitch = (
+    <div className="flex flex-wrap gap-1.5">
+      <Chip active={mode === 'csv'} onClick={() => { setMode('csv'); reset(); }}><FileSpreadsheet className="mr-1 inline size-3.5" />CSV file</Chip>
+      <Chip active={mode === 'sheet'} onClick={() => { setMode('sheet'); reset(); }}><Sheet className="mr-1 inline size-3.5" />Google Sheet (one tab)</Chip>
+      <WorkbookChip active={mode === 'workbook'} onClick={() => { setMode('workbook'); reset(); }} />
+    </div>
+  );
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -145,13 +156,12 @@ export default function ImportClient() {
             </div>
           </CardBody>
         </Card>
+      ) : mode === 'workbook' ? (
+        <WorkbookImport modeSwitch={modeSwitch} team={meta?.team ?? []} />
       ) : (
         <Card>
           <CardBody className="space-y-5">
-            <div className="flex gap-1.5">
-              <Chip active={mode === 'csv'} onClick={() => { setMode('csv'); reset(); }}><FileSpreadsheet className="mr-1 inline size-3.5" />CSV file</Chip>
-              <Chip active={mode === 'sheet'} onClick={() => { setMode('sheet'); reset(); }}><Sheet className="mr-1 inline size-3.5" />Google Sheet</Chip>
-            </div>
+            {modeSwitch}
 
             {mode === 'csv' ? (
               <label

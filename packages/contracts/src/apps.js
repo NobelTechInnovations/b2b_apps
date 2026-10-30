@@ -234,6 +234,7 @@ export const APPS = [
     nav: [
       { label: 'Leads', path: '/leads', icon: 'Users', permission: 'leads.leads.view' },
       { label: 'Follow-ups', path: '/leads/followups', icon: 'BellRing', permission: 'leads.followups.view' },
+      { label: 'Reports', path: '/leads/reports', icon: 'ChartColumn', permission: 'leads.leads.view' },
       { label: 'Import', path: '/leads/import', icon: 'Upload', permission: 'leads.leads.import' },
       { label: 'Lead sources', path: '/leads/sources', icon: 'Plug', permission: 'leads.settings.manage' },
       { label: 'Fields & stages', path: '/leads/settings', icon: 'SlidersHorizontal', permission: 'leads.settings.manage' },
