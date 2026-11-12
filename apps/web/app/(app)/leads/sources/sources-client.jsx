@@ -132,7 +132,9 @@ export default function SourcesClient() {
                         {s.kind === 'meta' ? ` · ${s.config.form_ids?.length ? `${s.config.form_ids.length} form${s.config.form_ids.length === 1 ? '' : 's'}` : 'all forms'}` : ''}
                       </p>
                       <p className="text-xs text-[var(--text-tertiary)]">
-                        {s.assign_to.length ? `Shared between ${s.assign_to.map((id) => people.get(id) ?? 'a former member').join(', ')}` : 'Left unassigned'}
+                        {s.assign_to.length
+                          ? `${s.assign_mode === 'share' && s.assign_to.length > 1 ? 'Every lead to' : 'Split between'} ${s.assign_to.map((id) => people.get(id) ?? 'a former member').join(', ')}`
+                          : 'Left unassigned'}
                         {s.stage_id ? ` · into ${stages.get(s.stage_id) ?? 'a stage'}` : ''}
                         {s.tags.length ? ` · tagged ${s.tags.join(', ')}` : ''}
                       </p>
@@ -193,8 +195,8 @@ function Routing({ meta, value, onChange }) {
   return (
     <div className="space-y-4">
       <div>
-        <p className="mb-1 text-sm font-medium">Share new leads between</p>
-        <p className="mb-2 text-xs text-[var(--text-tertiary)]">One after another (round-robin). Choose nobody to leave them unassigned.</p>
+        <p className="mb-1 text-sm font-medium">Give new leads to</p>
+        <p className="mb-2 text-xs text-[var(--text-tertiary)]">Choose nobody to leave them unassigned.</p>
         <div className="flex flex-wrap gap-1.5">
           {(meta?.team ?? []).map((m) => (
             <Chip key={m.user_id} active={pool.includes(m.user_id)} onClick={() => onChange({ ...value, assign_to: pool.includes(m.user_id) ? pool.filter((x) => x !== m.user_id) : [...pool, m.user_id] })}>
@@ -202,6 +204,15 @@ function Routing({ meta, value, onChange }) {
             </Chip>
           ))}
         </div>
+        {pool.length > 1 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <Chip active={value.assign_mode !== 'share'} onClick={() => onChange({ ...value, assign_mode: 'split' })}>Split between them</Chip>
+            <Chip active={value.assign_mode === 'share'} onClick={() => onChange({ ...value, assign_mode: 'share' })}>Every lead to all of them</Chip>
+            <span className="text-xs text-[var(--text-tertiary)]">
+              {value.assign_mode === 'share' ? 'Each lead shows for all of them.' : 'One after another (round-robin).'}
+            </span>
+          </div>
+        )}
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Stage">
@@ -220,7 +231,7 @@ function Routing({ meta, value, onChange }) {
   );
 }
 const routingBody = (v) => ({
-  assign_to: v.assign_to ?? [], stage_id: v.stage_id ?? null,
+  assign_to: v.assign_to ?? [], assign_mode: v.assign_mode ?? 'split', stage_id: v.stage_id ?? null,
   tags: (v.tagsText ?? (v.tags ?? []).join(',')).split(',').map((t) => t.trim()).filter(Boolean),
 });
 
@@ -341,7 +352,7 @@ function SettingsModal({ source, meta, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState(null);
   useEffect(() => {
-    if (source) setForm({ name: source.name, assign_to: source.assign_to, stage_id: source.stage_id, tags: source.tags, auto_sync: source.auto_sync });
+    if (source) setForm({ name: source.name, assign_to: source.assign_to, assign_mode: source.assign_mode, stage_id: source.stage_id, tags: source.tags, auto_sync: source.auto_sync });
     setProblem(null);
   }, [source]);
   if (!source) return null;

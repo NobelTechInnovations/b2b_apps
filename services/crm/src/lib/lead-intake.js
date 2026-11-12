@@ -112,7 +112,11 @@ export function normaliseRow(raw, mapping, { fields, stages, ownersByEmail, keep
   const rating = ['hot', 'warm', 'cold'].find((r) => r === String(lead.rating ?? '').trim().toLowerCase()) ?? null;
   const stageName = text(lead.stage, 80)?.toLowerCase();
   const stage = stageName ? stages.find((s) => s.name.toLowerCase() === stageName) : null;
-  const owner = lead.owner_email ? ownersByEmail?.get(String(lead.owner_email).trim().toLowerCase()) : null;
+  // "Ravi, Priya" or "ravi@x.in & priya@x.in": the first owns the lead, the rest share it.
+  const ownerText = lead.owner_email ? String(lead.owner_email).trim().toLowerCase() : '';
+  const owners = !ownerText ? [] : ownersByEmail?.has(ownerText) ? [ownersByEmail.get(ownerText)]
+    : [...new Set(ownerText.split(/\s*(?:[,;&/+]|\band\b)\s*/).map((part) => ownersByEmail?.get(part)).filter(Boolean))];
+  const owner = owners[0] ?? null;
   const tags = lead.tags ? String(lead.tags).split(/[;,]/).map((t) => t.trim().slice(0, 40)).filter(Boolean).slice(0, 20) : [];
 
   const { values: custom, problems } = cleanCustom(fields, customInput, { strict: false });
@@ -135,6 +139,7 @@ export function normaliseRow(raw, mapping, { fields, stages, ownersByEmail, keep
     rating,
     stage_id: stage?.id ?? null,
     owner_user_id: owner ?? null,
+    shared_with: owners.slice(1),
     tags,
     custom,
     notes,
@@ -149,6 +154,7 @@ export function normaliseRow(raw, mapping, { fields, stages, ownersByEmail, keep
  *     skipped, or (`onDuplicate: 'note'`) noted on the existing lead, so a
  *     person who enquires twice stays one lead with both enquiries;
  *   - new leads go to their row's owner, else `ownerId`, else round-robin
+ *     over `assignTo` (with `shareAll`, each lead is also shared with the rest of them)
  *     through `assignTo`;
  *   - a handful of leads raise one event each; a big import raises one
  *     summary per person it was shared with.
@@ -156,7 +162,7 @@ export function normaliseRow(raw, mapping, { fields, stages, ownersByEmail, keep
 export async function intakeLeads(db, {
   orgId, actorId = null, rows, mapping = null, origin,
   ownerId = null, assignTo = [], assignCursor = 0, stageId = null, tags = [],
-  onDuplicate = 'skip', ownersByEmail = null,
+  onDuplicate = 'skip', ownersByEmail = null, shareAll = false,
 }) {
   const fields = await activeFields(db, orgId);
   const stages = await ensureStages(db, orgId);
@@ -216,6 +222,7 @@ export async function intakeLeads(db, {
       owner = assignTo[cursor % assignTo.length];
       cursor += 1;
     }
+    const sharedWith = [...new Set([...(p.lead.shared_with ?? []), ...(shareAll ? assignTo : [])])];
     return {
       id: id('led'),
       first_name: p.lead.first_name ?? 'Lead',
@@ -230,6 +237,7 @@ export async function intakeLeads(db, {
       score: scoreFor(p.lead),
       estimated_value: p.lead.estimated_value,
       owner_user_id: owner,
+      shared_with: sharedWith.filter((u) => u !== owner),
       tags: [...new Set([...tags, ...p.lead.tags])].slice(0, 20),
       notes: p.lead.notes,
       custom: p.lead.custom,
@@ -247,17 +255,17 @@ export async function intakeLeads(db, {
       const chunk = records.slice(start, start + 250);
       const inserted = await tx.rows(
         `INSERT INTO leads (id, org_id, first_name, last_name, company_name, email, phone, job_title, city, source,
-                            rating, score, estimated_value, owner_user_id, tags, notes, custom, stage_id,
+                            rating, score, estimated_value, owner_user_id, shared_with, tags, notes, custom, stage_id,
                             source_id, source_detail, ext_key, created_by)
          SELECT x.id, $1, x.first_name, x.last_name, x.company_name, x.email, x.phone, x.job_title, x.city, x.source,
-                x.rating, x.score, x.estimated_value, x.owner_user_id, COALESCE(x.tags, '{}'), x.notes, COALESCE(x.custom, '{}'),
+                x.rating, x.score, x.estimated_value, x.owner_user_id, COALESCE(x.shared_with, '{}'), COALESCE(x.tags, '{}'), x.notes, COALESCE(x.custom, '{}'),
                 x.stage_id, x.source_id, x.source_detail, x.ext_key, $2
            FROM jsonb_to_recordset($3::jsonb) AS x(
                   id text, first_name text, last_name text, company_name text, email text, phone text, job_title text,
                   city text, source text, rating text, score integer, estimated_value numeric, owner_user_id text,
-                  tags text[], notes text, custom jsonb, stage_id text, source_id text, source_detail text, ext_key text)
+                  shared_with text[], tags text[], notes text, custom jsonb, stage_id text, source_id text, source_detail text, ext_key text)
          ON CONFLICT (org_id, ext_key) WHERE ext_key IS NOT NULL DO NOTHING
-         RETURNING id, first_name, last_name, owner_user_id, email, company_name`,
+         RETURNING id, first_name, last_name, owner_user_id, shared_with, email, company_name`,
         [orgId, actorId, JSON.stringify(chunk)],
       );
       result.leads.push(...inserted);
@@ -282,16 +290,19 @@ export async function intakeLeads(db, {
           type: EVENTS.LEAD_CREATED, org_id: orgId, actor_id: actorId,
           data: { lead_id: lead.id, name: name(lead), company_name: lead.company_name, email: lead.email, source: origin.leadSource, owner_user_id: lead.owner_user_id },
         });
-        if (lead.owner_user_id && lead.owner_user_id !== actorId) {
+        for (const person of [lead.owner_user_id, ...(lead.shared_with ?? [])]) {
+          if (!person || person === actorId) continue;
           tx.emit({
             type: EVENTS.LEAD_ASSIGNED, org_id: orgId, actor_id: actorId,
-            data: { owner_user_id: lead.owner_user_id, count: 1, lead_id: lead.id, name: name(lead), via: origin.detail ?? origin.leadSource },
+            data: { owner_user_id: person, count: 1, lead_id: lead.id, name: name(lead), via: origin.detail ?? origin.leadSource },
           });
         }
       }
     } else {
       const perOwner = new Map();
-      for (const lead of result.leads) if (lead.owner_user_id) perOwner.set(lead.owner_user_id, (perOwner.get(lead.owner_user_id) ?? 0) + 1);
+      for (const lead of result.leads) {
+        for (const person of [lead.owner_user_id, ...(lead.shared_with ?? [])]) if (person) perOwner.set(person, (perOwner.get(person) ?? 0) + 1);
+      }
       tx.emit({
         type: EVENTS.LEADS_IMPORTED, org_id: orgId, actor_id: actorId,
         data: { created: result.created, duplicates: result.duplicates, failed: result.failed, via: origin.detail ?? origin.leadSource, created_by: actorId },

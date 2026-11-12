@@ -38,6 +38,9 @@ export function WorkbookImport({ modeSwitch, team = [] }) {
   const [plan, setPlan] = useState(null);
   const [choices, setChoices] = useState({});
   const [owner, setOwner] = useState('');
+  const [pool, setPool] = useState([]);
+  const [shareAll, setShareAll] = useState(false);
+  const [keepSynced, setKeepSynced] = useState(true);
   const [withFollowups, setWithFollowups] = useState(true);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState(null);
@@ -80,7 +83,8 @@ export function WorkbookImport({ modeSwitch, team = [] }) {
       }));
       const data = (await api.post('/leads/import/workbook', {
         ...source, name: plan.name, columns, skip_followups: !withFollowups,
-        ...(owner === 'me' ? { owner_user_id: user.id } : owner ? { owner_user_id: owner } : {}),
+        ...(owner === 'me' ? { owner_user_id: user.id } : owner === 'several' ? { assign_to: pool, assign_mode: shareAll ? 'share' : 'split' } : owner ? { owner_user_id: owner } : {}),
+        ...(source?.sheet_url ? { keep_synced: keepSynced } : {}),
       })).data;
       setResult(data);
     } catch (err) {
@@ -114,7 +118,11 @@ export function WorkbookImport({ modeSwitch, team = [] }) {
             <Link href="/leads/reports"><Button variant="secondary">See reports</Button></Link>
             <Button variant="ghost" icon={RotateCcw} onClick={reset}>Import another</Button>
           </div>
-          <p className="text-xs text-[var(--text-tertiary)]">Importing the same workbook again later adds only new students and new follow-ups.</p>
+          <p className="text-xs text-[var(--text-tertiary)]">
+            {result.source_id
+              ? 'The sheet stays connected: every 15 minutes, new students and new follow-up rows arrive by themselves. Manage it under Lead sources.'
+              : 'Importing the same workbook again later adds only new students and new follow-ups.'}
+          </p>
         </CardBody>
       </Card>
     );
@@ -247,19 +255,60 @@ export function WorkbookImport({ modeSwitch, team = [] }) {
                 <Select value={owner} onChange={(e) => setOwner(e.target.value)} className="w-56">
                   <option value="">Unassigned</option>
                   <option value="me">Me</option>
+                  {team.length > 1 && <option value="several">Several people…</option>}
                   {team.filter((m) => m.user_id !== user?.id).map((m) => <option key={m.user_id} value={m.user_id}>{m.name ?? m.email}</option>)}
                 </Select>
               </label>
+              {source?.sheet_url && (
+                <Checkbox
+                  checked={keepSynced}
+                  onChange={(e) => setKeepSynced(e.target.checked)}
+                  label="Keep this sheet connected"
+                  description="Every 15 minutes, new students and new follow-up rows from all tabs arrive by themselves."
+                />
+              )}
               <div className="flex-1" />
               <Button variant="ghost" onClick={reset}>Choose another file</Button>
-              <Button variant="primary" loading={busy} onClick={run} iconRight={ArrowRight}>
+              <Button variant="primary" loading={busy} disabled={owner === 'several' && !pool.length} onClick={run} iconRight={ArrowRight}>
                 Import {plan.leads.rows.toLocaleString('en-IN')} leads{plan.followups && withFollowups ? ` and ${plan.followups.rows.toLocaleString('en-IN')} follow-ups` : ''}
               </Button>
             </div>
+            {owner === 'several' && (
+              <SplitOrShare team={team} pool={pool} onPool={setPool} shareAll={shareAll} onShareAll={setShareAll} />
+            )}
           </div>
         )}
       </CardBody>
     </Card>
+  );
+}
+
+/** Several people get the leads: one after another, or every lead to all of them. */
+export function SplitOrShare({ team, pool, onPool, shareAll, onShareAll }) {
+  return (
+    <div className="space-y-2 rounded-lg border border-[var(--border-subtle)] p-3">
+      <p className="text-sm font-medium">People</p>
+      <div className="flex flex-wrap gap-1.5">
+        {team.map((m) => (
+          <Chip key={m.user_id} active={pool.includes(m.user_id)} onClick={() => onPool(pool.includes(m.user_id) ? pool.filter((x) => x !== m.user_id) : [...pool, m.user_id])}>
+            {m.name ?? m.email}
+          </Chip>
+        ))}
+      </div>
+      {pool.length > 1 && (
+        <div className="flex flex-wrap gap-1.5 pt-1">
+          <Chip active={!shareAll} onClick={() => onShareAll(false)}>Split between them</Chip>
+          <Chip active={shareAll} onClick={() => onShareAll(true)}>Every lead to all of them</Chip>
+        </div>
+      )}
+      {pool.length > 1 && (
+        <p className="text-xs text-[var(--text-tertiary)]">
+          {shareAll
+            ? 'Each lead shows in every chosen person’s leads, follow-ups and dashboard. One of them is its owner, in turn.'
+            : 'One after another (round-robin): each lead goes to one of them.'}
+        </p>
+      )}
+    </div>
   );
 }
 

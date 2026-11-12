@@ -18,7 +18,7 @@ import { ListToolbar, Pagination } from '@/components/data/list-shell';
 import { Table, THead, TBody, TH, TR, TD, TableSkeleton } from '@/components/ui/table';
 import { Avatar, Badge, Card, EmptyState, PageHeader, Alert, Skeleton } from '@/components/ui/primitives';
 import {
-  Chip, OUTCOME_LABEL, OUTCOME_TONE, SOURCE_LABEL, StageBadge, TZ, customValue, dueLabel, formName, telLink, useLeadsMeta, whatsappLink,
+  Chip, OUTCOME_LABEL, OUTCOME_TONE, SOURCE_LABEL, StageBadge, TZ, customValue, dueLabel, formName, sharedLabel, telLink, useLeadsMeta, whatsappLink,
 } from '@/components/leads/lead-kit';
 import { BOARD_BY, LeadBoard } from '@/components/leads/lead-board';
 import { LeadDrawer } from '@/components/leads/lead-drawer';
@@ -207,7 +207,9 @@ export default function LeadsClient() {
     try {
       const response = await api.post('/leads/leads/bulk', { ids: [...selected], action, ...extra });
       const n = response.data.changed;
-      toast.success(action === 'assign' && !can('leads.leads.assign') ? `${n} lead${n === 1 ? '' : 's'} handed over` : `${n} lead${n === 1 ? '' : 's'} updated`);
+      const leads = `${n} lead${n === 1 ? '' : 's'}`;
+      toast.success(action === 'share' ? `${leads} shared` : action === 'assign' && !can('leads.leads.assign') ? `${leads} handed over` : `${leads} updated`,
+        action === 'share' ? { description: 'They now appear in that teammate\'s leads as well.' } : undefined);
       setTag('');
       load();
     } catch (err) {
@@ -315,6 +317,10 @@ export default function LeadsClient() {
             <option value="">{canAssign ? 'Assign to…' : 'Hand over to…'}</option>
             {canAssign && <option value="none">Unassigned</option>}
             {teammates.map((m) => <option key={m.user_id} value={m.user_id}>{m.name ?? m.email}</option>)}
+          </Select>
+          <Select className="w-auto" value="" aria-label="Also share with" title="Keeps the owner, and shows the leads to this teammate too" onChange={(e) => e.target.value && bulk('share', { shared_with: [e.target.value] })}>
+            <option value="">Also share with…</option>
+            {(meta?.team ?? []).filter((m) => m.user_id !== user?.id || canAssign).map((m) => <option key={m.user_id} value={m.user_id}>{m.name ?? m.email}</option>)}
           </Select>
           <Select className="w-auto" value="" aria-label="Move to stage" onChange={(e) => e.target.value && bulk('stage', { stage_id: e.target.value })}>
             <option value="">Move to…</option>
@@ -515,6 +521,7 @@ function LeadRows({ rows, meta, listed, fieldsByKey, selected, toggle, toggleAll
                         <p className="flex items-center gap-1.5 truncate font-medium">
                           {lead.name}
                           {lead.rating === 'hot' && <Badge size="sm" tone="critical">hot</Badge>}
+                          {!meta?.sees_all && lead.owner && lead.owner_user_id !== meta?.me && <Badge size="sm" tone="info">with {lead.owner.name}</Badge>}
                         </p>
                         <p className="truncate text-xs text-[var(--text-tertiary)]">{[lead.company_name, lead.city].filter(Boolean).join(' · ') || lead.email || '—'}</p>
                       </div>
@@ -547,7 +554,7 @@ function LeadRows({ rows, meta, listed, fieldsByKey, selected, toggle, toggleAll
                   </TD>
                   {meta?.sees_all && (
                     <TD className="text-sm text-[var(--text-secondary)]">
-                      {lead.owner ? <span className="flex items-center gap-1.5"><Avatar name={lead.owner.name ?? '?'} size="xs" />{lead.owner.name}</span> : <span className="text-[var(--color-caution-700)]">Unassigned</span>}
+                      {lead.owner ? <span className="flex items-center gap-1.5" title={sharedLabel(lead)?.title}><Avatar name={lead.owner.name ?? '?'} size="xs" />{lead.owner.name}{sharedLabel(lead) && <Badge size="sm" tone="neutral">{sharedLabel(lead).short}</Badge>}</span> : <span className="text-[var(--color-caution-700)]">Unassigned</span>}
                     </TD>
                   )}
                   {listed.map((f) => <TD key={f.id} className="text-sm text-[var(--text-secondary)]">{customValue(fieldsByKey.get(f.key), lead.custom?.[f.key]) ?? '—'}</TD>)}

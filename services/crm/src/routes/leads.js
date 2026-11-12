@@ -11,9 +11,9 @@ const SORTS = ['created_at', 'updated_at', 'score', 'estimated_value', 'last_con
 export async function leadRoutes(app) {
   const { db } = app;
 
-  /** People see the leads assigned to them; `crm.leads.manage` sees everyone's. */
+  /** People see the leads assigned or shared with them; `crm.leads.manage` sees everyone's. */
   const own = (ctx) => !ctx.can('crm.leads.manage');
-  const visible = (ctx, lead) => lead && (!own(ctx) || lead.owner_user_id === ctx.userId) ? lead : null;
+  const visible = (ctx, lead) => lead && (!own(ctx) || lead.owner_user_id === ctx.userId || (lead.shared_with ?? []).includes(ctx.userId)) ? lead : null;
 
   // ═══════════════════════════════════════════════════════════════════ LIST
   app.get(
@@ -37,13 +37,13 @@ export async function leadRoutes(app) {
 
       const where = ['l.org_id = $1', 'l.archived_at IS NULL'];
       const values = [orgId];
-      if (own(request.ctx)) { values.push(userId); where.push(`l.owner_user_id = $${values.length}`); }
+      if (own(request.ctx)) { values.push(userId); where.push(`(l.owner_user_id = $${values.length} OR $${values.length} = ANY(l.shared_with))`); }
 
       if (status) { values.push(status); where.push(`l.status = $${values.length}`); }
       if (rating) { values.push(rating); where.push(`l.rating = $${values.length}`); }
       if (source) { values.push(source); where.push(`l.source = $${values.length}`); }
       if (owner)  { values.push(owner);  where.push(`l.owner_user_id = $${values.length}`); }
-      if (mine)   { values.push(userId); where.push(`l.owner_user_id = $${values.length}`); }
+      if (mine)   { values.push(userId); where.push(`(l.owner_user_id = $${values.length} OR $${values.length} = ANY(l.shared_with))`); }
 
       if (q) {
         values.push(`%${q}%`);
@@ -69,7 +69,7 @@ export async function leadRoutes(app) {
              count(*) FILTER (WHERE status = 'qualified')::int   AS qualified,
              count(*) FILTER (WHERE status = 'converted')::int   AS converted,
              COALESCE(sum(estimated_value) FILTER (WHERE status <> 'unqualified'), 0)::text AS open_value
-           FROM leads WHERE org_id = $1 AND archived_at IS NULL${own(request.ctx) ? ' AND owner_user_id = $2' : ''}`,
+           FROM leads WHERE org_id = $1 AND archived_at IS NULL${own(request.ctx) ? ' AND (owner_user_id = $2 OR $2 = ANY(shared_with))' : ''}`,
           own(request.ctx) ? [orgId, userId] : [orgId],
         ),
       ]);

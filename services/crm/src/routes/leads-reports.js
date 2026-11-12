@@ -40,7 +40,7 @@ export async function leadsReportRoutes(app) {
   app.get('/leads/reports', { preHandler: guard('leads.leads.view'), schema: { querystring: query(rangeQuery) } }, async (request) => {
     const { tz, from, to, person, values } = bounds(request);
     const mine = `($5::text IS NULL OR a.created_by = $5 OR a.assigned_to = $5)`;
-    const ownLead = `($5::text IS NULL OR l.owner_user_id = $5)`;
+    const ownLead = `($5::text IS NULL OR l.owner_user_id = $5 OR $5 = ANY(l.shared_with))`;
 
     const [work, leads, won, overdue, days, team, sources, outcomes] = await Promise.all([
       // Calls and follow-ups, this period and the one before it.

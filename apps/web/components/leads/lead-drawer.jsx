@@ -16,7 +16,7 @@ import { ConfirmModal, Modal } from '@/components/ui/modal';
 import { Drawer, DetailGrid } from '@/components/data/drawer';
 import { Avatar, Badge, Alert, Skeleton } from '@/components/ui/primitives';
 import {
-  Chip, FollowupPicker, OUTCOME_LABEL, SOURCE_LABEL, StageBadge, customValue, dueLabel, telLink, whatsappLink,
+  Chip, FollowupPicker, OUTCOME_LABEL, PeoplePicker, SOURCE_LABEL, StageBadge, customValue, dueLabel, telLink, whatsappLink,
 } from './lead-kit';
 import { LeadFormModal } from './lead-form';
 
@@ -160,6 +160,7 @@ export function LeadDrawer({ leadId, meta, onClose, onChanged }) {
                 {(meta?.team ?? []).filter((m) => m.user_id !== user?.id).map((m) => <option key={m.user_id} value={m.user_id}>{m.name ?? m.email}</option>)}
               </Select>
             )}
+            <SharedWith lead={lead} meta={meta} onSave={(shared) => patch({ shared_with: shared }, shared.length ? 'Sharing updated' : 'No longer shared')} />
             {lead.rating && <Badge size="sm" tone={{ hot: 'critical', warm: 'caution', cold: 'info' }[lead.rating]} dot>{lead.rating}</Badge>}
             {lead.status === 'converted' && <Badge size="sm" tone="positive">Customer in CRM</Badge>}
           </div>
@@ -540,5 +541,45 @@ function ConvertModal({ lead, onClose, onDone }) {
         {lead.city && <p className="flex items-center gap-1.5 text-xs text-[var(--text-tertiary)]"><MapPin className="size-3" />{lead.city}</p>}
       </div>
     </Modal>
+  );
+}
+
+/** The teammates a lead is shared with: shown to all, changed by its owner or a manager. */
+function SharedWith({ lead, meta, onSave }) {
+  const { can, user } = useWorkspace();
+  const [editing, setEditing] = useState(null);
+  const shared = lead.shared ?? [];
+  const canShare = can('leads.leads.assign') || lead.owner_user_id === user?.id;
+  if (!shared.length && (!canShare || (meta?.team?.length ?? 0) < 2)) return null;
+  return (
+    <>
+      <button
+        type="button"
+        disabled={!canShare}
+        onClick={() => setEditing(lead.shared_with ?? [])}
+        title={shared.length ? `Shared with ${shared.map((p) => p.name).join(', ')}` : 'Share this lead with a teammate'}
+        className="flex items-center gap-1.5 rounded-md border border-[var(--border-default)] px-2 py-1 text-sm text-[var(--text-secondary)] enabled:hover:bg-[var(--surface-hover)]"
+      >
+        <Users className="size-3.5" />
+        {shared.length ? (
+          <span className="flex items-center -space-x-1">{shared.slice(0, 3).map((p) => <Avatar key={p.user_id} name={p.name ?? '?'} size="xs" />)}</span>
+        ) : null}
+        <span>{shared.length ? `Shared with ${shared.length === 1 ? shared[0].name : `${shared.length} people`}` : 'Share'}</span>
+      </button>
+      <Modal
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        title="Share this lead"
+        description="Everyone you pick sees it in their leads, can call it and book follow-ups. The owner stays the same."
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button onClick={async () => { await onSave(editing); setEditing(null); }}>Save</Button>
+          </>
+        )}
+      >
+        <PeoplePicker team={meta?.team} value={editing ?? []} exclude={[lead.owner_user_id].filter(Boolean)} onChange={setEditing} />
+      </Modal>
+    </>
   );
 }

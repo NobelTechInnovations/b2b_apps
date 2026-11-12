@@ -48,6 +48,8 @@ const leadFields = {
   rating: nullable(v.enum(['hot', 'warm', 'cold'])),
   estimated_value: nullable(v.money),
   owner_user_id: nullable(v.id('usr')),
+  // Teammates who see and work the lead alongside its owner.
+  shared_with: { type: 'array', items: v.id('usr'), maxItems: 20, uniqueItems: true },
   stage_id: v.id('lstg'),
   tags: { type: 'array', items: v.text(40), maxItems: 20 },
   notes: nullable(v.longText),
@@ -64,7 +66,8 @@ const followupBody = {
 /**
  * The Leads app: a calling team's view of the leads table.
  *
- * People see the leads they own; `leads.team.manage` (owners, admins) sees
+ * People see the leads they own or that are shared with them;
+ * `leads.team.manage` (owners, admins) sees
  * everyone's. A follow-up is an activity with a due time, so the same history
  * carries over when a lead becomes a CRM customer.
  */
@@ -79,8 +82,11 @@ export async function leadsAppRoutes(app) {
   function scope(ctx, values, alias = 'l') {
     if (seesAll(ctx)) return null;
     values.push(ctx.userId);
-    return `${alias}.owner_user_id = $${values.length}`;
+    return `(${alias}.owner_user_id = $${values.length} OR $${values.length} = ANY(${alias}.shared_with))`;
   }
+
+  /** The lead's owner and the teammates it is shared with. */
+  const worksOn = (lead, userId) => lead.owner_user_id === userId || (lead.shared_with ?? []).includes(userId);
 
   async function loadLead(store, ctx, leadId, { lock = false } = {}) {
     const row = await store.one(
@@ -88,7 +94,7 @@ export async function leadsAppRoutes(app) {
       [ctx.orgId, leadId],
     );
     // Someone else's lead is "not found", not "forbidden": its existence is not theirs to learn.
-    if (!row || (!seesAll(ctx) && row.owner_user_id !== ctx.userId)) throw notFound('Lead');
+    if (!row || (!seesAll(ctx) && !worksOn(row, ctx.userId))) throw notFound('Lead');
     return row;
   }
 
@@ -131,6 +137,49 @@ export async function leadsAppRoutes(app) {
     return managed ? null : `Handed over by ${names.get(ctx.userId)?.name ?? 'a teammate'}`;
   }
 
+  /**
+   * Who a lead is shared with. Managers share anyone's lead; the owner shares
+   * their own. Everyone on the list must be able to open Leads.
+   */
+  async function assertSharing(ctx, lead, userIds) {
+    if (!ctx.can('leads.leads.assign') && lead && lead.owner_user_id !== ctx.userId) {
+      throw forbidden('Only the lead\'s owner or a manager can change who it is shared with.');
+    }
+    if (!userIds.length) return;
+    const members = new Set((await team(ctx.orgId)).map((p) => p.user_id));
+    if (userIds.some((u) => !members.has(u))) throw badRequest('Share only with people who have access to Leads.');
+  }
+
+  /**
+   * Note who was added or removed, and tell the people it was just shared
+   * with (a bulk change tells them once, for all its leads). Returns who was added.
+   */
+  async function shareChanged(tx, ctx, lead, before, after, names = null, { notify = true } = {}) {
+    const added = after.filter((u) => !before.includes(u));
+    const removed = before.filter((u) => !after.includes(u));
+    if (!added.length && !removed.length) return added;
+    const known = names ?? await people.lookup([...added, ...removed, ctx.userId]);
+    const who = (list) => list.map((u) => known.get(u)?.name ?? 'a teammate').join(', ');
+    if (added.length) await log(tx, ctx, lead.id, `Shared with ${who(added)}`);
+    if (removed.length) await log(tx, ctx, lead.id, `No longer shared with ${who(removed)}`);
+    if (notify) sharedNotice(tx, ctx, added, [lead], known);
+    return added;
+  }
+
+  function sharedNotice(tx, ctx, userIds, leads, names) {
+    const via = `Shared by ${names.get(ctx.userId)?.name ?? 'a teammate'}`;
+    for (const userId of new Set(userIds)) {
+      if (userId === ctx.userId || !leads.length) continue;
+      tx.emit({
+        type: EVENTS.LEAD_ASSIGNED, org_id: ctx.orgId, actor_id: ctx.userId,
+        data: { owner_user_id: userId, count: leads.length, ...(leads.length === 1 ? { lead_id: leads[0].id, name: leadName(leads[0]) } : {}), via },
+      });
+    }
+  }
+
+  /** The share list without the owner (they see it anyway) and without repeats. */
+  const shareList = (userIds, ownerId) => [...new Set(userIds ?? [])].filter((u) => u && u !== ownerId);
+
   async function stageById(store, orgId, stageId) {
     const stage = await store.one(`SELECT * FROM lead_stages WHERE org_id = $1 AND id = $2`, [orgId, stageId]);
     if (!stage) throw badRequest('That stage does not exist.');
@@ -157,9 +206,24 @@ export async function leadsAppRoutes(app) {
     [orgId, leadId],
   );
 
+  /**
+   * The lead was worked (a call, a message, a note, a new stage): the
+   * follow-ups that were due by now are done, so they leave everyone's list.
+   * A won or lost lead needs no more follow-ups at all.
+   */
+  async function closeDue(tx, orgId, leadId, { all = false } = {}) {
+    await tx.query(
+      `UPDATE activities SET completed_at = now(), outcome = COALESCE(outcome, 'done')
+        WHERE org_id = $1 AND related_type = 'lead' AND related_id = $2 AND completed_at IS NULL AND due_at IS NOT NULL
+          AND ($3 OR due_at <= now() + interval '1 hour')`,
+      [orgId, leadId, all],
+    );
+    await syncNext(tx, orgId, leadId);
+  }
+
   async function addFollowup(tx, ctx, lead, f) {
     const assignee = f.assigned_to ?? lead.owner_user_id ?? ctx.userId;
-    if (assignee !== ctx.userId && assignee !== lead.owner_user_id) await assertOwner(ctx, assignee);
+    if (assignee !== ctx.userId && !worksOn(lead, assignee)) await assertOwner(ctx, assignee);
     const row = await tx.one(
       `INSERT INTO activities (id, org_id, kind, subject, body, related_type, related_id, due_at, assigned_to, created_by)
        VALUES ($1,$2,$3,$4,$5,'lead',$6,$7,$8,$9) RETURNING *`,
@@ -181,11 +245,15 @@ export async function leadsAppRoutes(app) {
       [ctx.orgId, lead.id, to.id, statusForStage(to, lead.status)],
     );
     await log(tx, ctx, lead.id, `Moved to ${to.name}${from ? ` from ${from.name}` : ''}`);
+    await closeDue(tx, ctx.orgId, lead.id, { all: to.kind !== 'open' });
   }
 
   async function hydrate(rows) {
-    const names = await people.lookup(rows.map((r) => r.owner_user_id));
-    return rows.map((r) => ({ ...shape(r), owner: r.owner_user_id ? names.get(r.owner_user_id) ?? { user_id: r.owner_user_id, name: 'Former member' } : null }));
+    const names = await people.lookup(rows.flatMap((r) => [r.owner_user_id, ...(r.shared_with ?? [])]));
+    const person = (userId) => names.get(userId) ?? { user_id: userId, name: 'Former member' };
+    return rows.map((r) => ({
+      ...shape(r), owner: r.owner_user_id ? person(r.owner_user_id) : null, shared: (r.shared_with ?? []).map(person),
+    }));
   }
 
   const tzOf = (request) => (TIMEZONES.has(request.query?.tz) ? request.query.tz : 'Asia/Kolkata');
@@ -211,7 +279,7 @@ export async function leadsAppRoutes(app) {
         outcomes: Object.entries(OUTCOMES).map(([value, label]) => ({ value, label })),
         sources: LEAD_SOURCES,
         forms,
-        sees_all: seesAll(request.ctx),
+        sees_all: seesAll(request.ctx), me: request.ctx.userId,
       },
     };
   });
@@ -264,9 +332,10 @@ export async function leadsAppRoutes(app) {
 
     if (qs.stage_id) add('COALESCE(l.stage_id, $3) = ?', qs.stage_id);
     if (qs.stage_kind) add(`COALESCE(s.kind, 'open') = ?`, qs.stage_kind);
-    if (qs.owner === 'me') add('l.owner_user_id = ?', userId);
+    // A lead shared with someone is theirs too.
+    if (qs.owner === 'me') add('(l.owner_user_id = ? OR ? = ANY(l.shared_with))', userId);
     else if (qs.owner === 'unassigned') where.push('l.owner_user_id IS NULL');
-    else if (qs.owner) add('l.owner_user_id = ?', qs.owner);
+    else if (qs.owner) add('(l.owner_user_id = ? OR ? = ANY(l.shared_with))', qs.owner);
     if (qs.source) add('l.source = ?', qs.source);
     if (qs.source_id) add('l.source_id = ?', qs.source_id);
     if (qs.form) add(`${FORM_KEY} = ?`, qs.form);
@@ -354,7 +423,7 @@ export async function leadsAppRoutes(app) {
         [orgId, ids],
       ) : [],
     ]);
-    const names = await people.lookup([...leads.map((l) => l.owner_user_id), ...timeline.flatMap((a) => [a.created_by, a.assigned_to])]);
+    const names = await people.lookup([...leads.flatMap((l) => [l.owner_user_id, ...l.shared_with]), ...timeline.flatMap((a) => [a.created_by, a.assigned_to])]);
     const who = (userId) => (userId ? names.get(userId)?.name ?? 'Former member' : '');
     // Excel has no time zones: write each moment as the viewer's wall-clock time.
     const offsetOf = (date) => {
@@ -374,20 +443,33 @@ export async function leadsAppRoutes(app) {
     }
     const status = (a) => (a.canceled_at ? 'Cancelled' : a.completed_at ? 'Done' : a.due_at && new Date(a.due_at) < new Date() ? 'Overdue' : 'Open');
     const result = (a) => (a.outcome ? OUTCOMES[a.outcome] ?? a.outcome : '');
+    const KIND_NAME = { call: 'Call', whatsapp: 'WhatsApp', email: 'Email', meeting: 'Meeting', visit: 'Visit', note: 'Note', update: 'Update', task: 'Task' };
+    // Every contact with the lead, oldest first: one set of columns each on the lead's own row.
+    const contacts = (entries) => entries
+      .filter((a) => a.completed_at && !a.canceled_at && (a.kind !== 'update' || a.body))
+      .sort((x, y) => new Date(x.completed_at) - new Date(y.completed_at));
+    const rounds = Math.min(30, Math.max(0, ...leads.map((l) => contacts(byLead.get(l.id) ?? []).length)));
 
     const book = new ExcelJS.Workbook();
     book.creator = 'Nexus';
     const sheet = book.addWorksheet('Leads', { views: [{ state: 'frozen', ySplit: 1 }] });
     sheet.columns = [
-      { header: 'Name', key: 'name', width: 24 }, { header: 'Phone', key: 'phone', width: 16 }, { header: 'Email', key: 'email', width: 26 },
+      { header: 'Lead ID', key: 'lead_id', width: 14 }, { header: 'Name', key: 'name', width: 24 }, { header: 'Phone', key: 'phone', width: 16 }, { header: 'Email', key: 'email', width: 26 },
       { header: 'Company', key: 'company', width: 20 }, { header: 'City', key: 'city', width: 14 }, { header: 'Stage', key: 'stage', width: 14 },
-      { header: 'Owner', key: 'owner', width: 18 }, { header: 'Source', key: 'source', width: 14 }, { header: 'Form / source', key: 'form', width: 24 },
+      { header: 'Owner', key: 'owner', width: 18 }, { header: 'Shared with', key: 'shared', width: 22 }, { header: 'Source', key: 'source', width: 14 }, { header: 'Form / source', key: 'form', width: 24 },
       { header: 'Tags', key: 'tags', width: 18 }, { header: 'Added on', key: 'added', width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } },
       { header: 'Calls', key: 'calls', width: 8 }, { header: 'Last call', key: 'last_call', width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } },
       { header: 'Last call result', key: 'last_result', width: 20 }, { header: 'Next follow-up', key: 'next', width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } },
       { header: 'Follow-ups done', key: 'done', width: 10 }, { header: 'Open follow-ups', key: 'open', width: 10 },
       ...fields.map((f) => ({ header: f.label, key: `custom_${f.key}`, width: Math.min(30, Math.max(12, f.label.length + 2)) })),
       { header: 'Notes', key: 'notes', width: 40 }, { header: 'Follow-up history', key: 'history', width: 70 },
+      ...Array.from({ length: rounds }, (_, i) => [
+        { header: `Follow-up ${i + 1} date`, key: `f${i}_date`, width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } },
+        { header: `Follow-up ${i + 1} type`, key: `f${i}_type`, width: 10 },
+        { header: `Follow-up ${i + 1} by`, key: `f${i}_by`, width: 16 },
+        { header: `Follow-up ${i + 1} result`, key: `f${i}_result`, width: 16 },
+        { header: `Follow-up ${i + 1} note`, key: `f${i}_note`, width: 40 },
+      ]).flat(),
     ];
     for (const l of leads) {
       const entries = byLead.get(l.id) ?? [];
@@ -397,9 +479,14 @@ export async function leadsAppRoutes(app) {
         return [when, label, result(a) && a.kind === 'call' && !a.subject.includes(result(a)) ? result(a) : '', who(a.created_by), a.body?.replace(/\s+/g, ' ').slice(0, 300)]
           .filter(Boolean).join(' · ');
       }).join('\n');
+      const followCols = Object.fromEntries(contacts(entries).slice(0, rounds).flatMap((a, i) => [
+        [`f${i}_date`, local(a.completed_at)], [`f${i}_type`, a.due_at ? 'Follow-up' : KIND_NAME[a.kind] ?? a.kind],
+        [`f${i}_by`, who(a.created_by)], [`f${i}_result`, result(a)],
+        [`f${i}_note`, [a.kind === 'update' || a.subject.startsWith('Call ·') ? null : a.subject, a.body].filter(Boolean).join(' — ')],
+      ]));
       sheet.addRow({
-        name: [l.first_name, l.last_name].filter(Boolean).join(' '), phone: l.phone ?? '', email: l.email ?? '', company: l.company_name ?? '',
-        city: l.city ?? '', stage: l.stage_name ?? '', owner: who(l.owner_user_id), source: l.source ?? '', form: l.source_detail ?? '',
+        lead_id: l.id, name: [l.first_name, l.last_name].filter(Boolean).join(' '), phone: l.phone ?? '', email: l.email ?? '', company: l.company_name ?? '',
+        city: l.city ?? '', stage: l.stage_name ?? '', owner: who(l.owner_user_id), shared: l.shared_with.map(who).join(', '), source: l.source ?? '', form: l.source_detail ?? '',
         tags: (l.tags ?? []).join(', '), added: local(l.created_at), calls: l.call_count ?? 0, last_call: local(l.last_call_at),
         last_result: l.last_call_outcome ? OUTCOMES[l.last_call_outcome] ?? l.last_call_outcome : '', next: local(l.next_followup_at),
         done: entries.filter((a) => a.due_at && a.completed_at && !a.canceled_at).length,
@@ -408,7 +495,7 @@ export async function leadsAppRoutes(app) {
           const v = l.custom?.[f.key];
           return [`custom_${f.key}`, Array.isArray(v) ? v.join(', ') : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : v ?? ''];
         })),
-        notes: l.notes ?? '', history,
+        notes: l.notes ?? '', history, ...followCols,
       });
     }
     sheet.getRow(1).font = { bold: true };
@@ -417,7 +504,8 @@ export async function leadsAppRoutes(app) {
 
     const log = book.addWorksheet('Calls & follow-ups', { views: [{ state: 'frozen', ySplit: 1 }] });
     log.columns = [
-      { header: 'Lead', key: 'lead', width: 24 }, { header: 'Phone', key: 'phone', width: 16 },
+      { header: 'Lead ID', key: 'lead_id', width: 14 }, { header: 'Lead', key: 'lead', width: 24 }, { header: 'Phone', key: 'phone', width: 16 },
+      { header: 'Stage', key: 'stage', width: 14 }, { header: 'Owner', key: 'owner', width: 16 },
       { header: 'Date', key: 'date', width: 17, style: { numFmt: 'dd mmm yyyy hh:mm' } }, { header: 'Type', key: 'type', width: 12 },
       { header: 'What happened', key: 'subject', width: 30 }, { header: 'Result', key: 'result', width: 18 },
       { header: 'By', key: 'by', width: 18 }, { header: 'For', key: 'for', width: 18 },
@@ -428,8 +516,9 @@ export async function leadsAppRoutes(app) {
     for (const a of timeline) {
       const l = leadById.get(a.related_id);
       log.addRow({
-        lead: [l?.first_name, l?.last_name].filter(Boolean).join(' '), phone: l?.phone ?? '', date: local(a.completed_at ?? a.created_at),
-        type: a.due_at ? 'Follow-up' : ({ call: 'Call', whatsapp: 'WhatsApp', email: 'Email', meeting: 'Meeting', visit: 'Visit', note: 'Note', update: 'Update', task: 'Task' }[a.kind] ?? a.kind),
+        lead_id: a.related_id, lead: [l?.first_name, l?.last_name].filter(Boolean).join(' '), phone: l?.phone ?? '',
+        stage: l?.stage_name ?? '', owner: who(l?.owner_user_id), date: local(a.completed_at ?? a.created_at),
+        type: a.due_at ? 'Follow-up' : (KIND_NAME[a.kind] ?? a.kind),
         subject: a.subject, result: result(a), by: who(a.created_by), for: who(a.assigned_to), due: local(a.due_at),
         status: a.due_at ? status(a) : 'Done', note: a.body ?? '',
       });
@@ -549,12 +638,12 @@ export async function leadsAppRoutes(app) {
         [request.ctx.orgId, lead.id],
       ),
     ]);
-    const names = await people.lookup([lead.owner_user_id, ...timeline.flatMap((a) => [a.created_by, a.assigned_to])]);
+    const names = await people.lookup([lead.owner_user_id, ...lead.shared_with, ...timeline.flatMap((a) => [a.created_by, a.assigned_to])]);
     const person = (userId) => (userId ? names.get(userId) ?? { user_id: userId, name: 'Former member' } : null);
     const entries = timeline.map((a) => ({ ...a, by: person(a.created_by), for: person(a.assigned_to) }));
     return {
       data: {
-        ...shape(lead), stage, owner: person(lead.owner_user_id),
+        ...shape(lead), stage, owner: person(lead.owner_user_id), shared: lead.shared_with.map(person),
         followups: entries.filter((a) => a.due_at && !a.completed_at).sort((a, b) => new Date(a.due_at) - new Date(b.due_at)),
         timeline: entries.filter((a) => a.completed_at || !a.due_at),
       },
@@ -582,6 +671,9 @@ export async function leadsAppRoutes(app) {
 
     const owner = b.owner_user_id === undefined ? userId : b.owner_user_id;
     await assertOwner(request.ctx, owner);
+    const shared = shareList(b.shared_with, owner);
+    // Sharing someone else's new lead takes the right to assign it.
+    await assertSharing(request.ctx, owner === userId ? null : { owner_user_id: owner }, shared);
     const fields = await activeFields(db, orgId);
     const { values: custom } = cleanCustom(fields, b.custom ?? {});
     const stages = await ensureStages(db, orgId);
@@ -589,12 +681,12 @@ export async function leadsAppRoutes(app) {
 
     if (!b.allow_duplicate && (email || phone)) {
       const twin = await db.one(
-        `SELECT id, first_name, last_name, owner_user_id FROM leads
+        `SELECT id, first_name, last_name, owner_user_id, shared_with FROM leads
           WHERE org_id = $1 AND archived_at IS NULL AND (lower(email) = $2 OR phone_key = $3) LIMIT 1`,
         [orgId, email, phoneKey(phone)],
       );
       if (twin) {
-        const visible = seesAll(request.ctx) || twin.owner_user_id === userId;
+        const visible = seesAll(request.ctx) || worksOn(twin, userId);
         throw conflict('A lead with this phone or email already exists.', {
           code: 'duplicate_lead', lead_id: visible ? twin.id : null, name: visible ? leadName(twin) : null,
         });
@@ -611,6 +703,10 @@ export async function leadsAppRoutes(app) {
           owner_user_id: owner, tags: b.tags ?? [], notes: b.notes?.trim() || null, custom, stage_id: b.stage_id ?? null,
         },
       });
+      if (shared.length) {
+        await tx.query(`UPDATE leads SET shared_with = $3 WHERE org_id = $1 AND id = $2`, [orgId, created.id, shared]);
+        await shareChanged(tx, request.ctx, created, [], shared);
+      }
       if (b.followup) await addFollowup(tx, request.ctx, created, b.followup);
       return created;
     });
@@ -664,6 +760,17 @@ export async function leadsAppRoutes(app) {
         for (const [key, value] of Object.entries(merged)) if (value === null) delete merged[key];
         set('custom', JSON.stringify(merged));
       }
+      const owner = b.owner_user_id === undefined ? lead.owner_user_id : b.owner_user_id;
+      if (b.shared_with !== undefined || owner !== lead.owner_user_id) {
+        const after = shareList(b.shared_with ?? lead.shared_with, owner);
+        const sameList = after.length === lead.shared_with.length && after.every((u) => lead.shared_with.includes(u));
+        if (!sameList) {
+          // Only the people being added need checking; a new owner simply leaves the list.
+          if (b.shared_with !== undefined) await assertSharing(request.ctx, lead, after.filter((u) => !lead.shared_with.includes(u)));
+          set('shared_with', after);
+          await shareChanged(tx, request.ctx, lead, lead.shared_with.filter((u) => u !== owner), after);
+        }
+      }
       if (b.owner_user_id !== undefined && b.owner_user_id !== lead.owner_user_id) {
         await assertHandover(request.ctx, lead, b.owner_user_id);
         set('owner_user_id', b.owner_user_id);
@@ -680,7 +787,7 @@ export async function leadsAppRoutes(app) {
       if (b.stage_id) await changeStage(tx, request.ctx, lead, b.stage_id);
     });
     // Handed over: it is the teammate's now, so say so rather than show it.
-    if (!seesAll(request.ctx) && b.owner_user_id !== undefined && b.owner_user_id !== userId) {
+    if (!seesAll(request.ctx) && b.owner_user_id !== undefined && b.owner_user_id !== userId && !(b.shared_with ?? []).includes(userId)) {
       return { data: { id: request.params.id, owner_user_id: b.owner_user_id, handed_over: true } };
     }
     return { data: (await hydrate([await loadLead(db, request.ctx, request.params.id)]))[0] };
@@ -704,8 +811,10 @@ export async function leadsAppRoutes(app) {
     schema: {
       body: body({
         ids: { type: 'array', items: v.id('led'), minItems: 1, maxItems: 500 },
-        action: v.enum(['assign', 'stage', 'tag', 'delete']),
+        action: v.enum(['assign', 'share', 'stage', 'tag', 'delete']),
         owner_user_id: nullable(v.id('usr')),
+        // assign: who else works them (replaces the list when given); share: who to add.
+        shared_with: { type: 'array', items: v.id('usr'), maxItems: 20, uniqueItems: true },
         stage_id: v.id('lstg'),
         tag: v.text(40),
       }, ['ids', 'action']),
@@ -720,12 +829,16 @@ export async function leadsAppRoutes(app) {
       else if (!b.owner_user_id) throw badRequest('Choose who to hand them to.');
       else await assertTeammate(orgId, b.owner_user_id);
     }
+    if (b.action === 'share' && !b.shared_with?.length) throw badRequest('Choose who to share them with.');
+    if (b.shared_with?.length) await assertSharing(request.ctx, null, b.shared_with);
     const stage = b.action === 'stage' ? await stageById(db, orgId, b.stage_id ?? '') : null;
     if (b.action === 'tag' && !b.tag?.trim()) throw badRequest('Name the tag.');
 
     const changed = await db.transaction(async (tx) => {
       const values = [orgId, b.ids];
-      const own = scope(request.ctx, values);
+      // Handing over or sharing is for a lead's owner; a teammate it is shared with cannot pass it on.
+      const passing = (b.action === 'assign' || b.action === 'share') && !request.ctx.can('leads.leads.assign');
+      const own = passing ? (values.push(request.ctx.userId), `l.owner_user_id = $${values.length}`) : scope(request.ctx, values);
       const leads = await tx.rows(
         `SELECT * FROM leads l WHERE l.org_id = $1 AND l.id = ANY($2) AND l.archived_at IS NULL${own ? ` AND ${own}` : ''} FOR UPDATE`,
         values,
@@ -735,12 +848,34 @@ export async function leadsAppRoutes(app) {
       if (b.action === 'assign') {
         const owner = b.owner_user_id ?? null;
         let via = null;
-        const names = await people.lookup([owner, userId]);
-        for (const lead of leads) via = await handedOver(tx, request.ctx, lead, owner, names);
-        await tx.query(`UPDATE leads SET owner_user_id = $3, updated_at = now() WHERE org_id = $1 AND id = ANY($2)`, [orgId, ids, owner]);
-        if (owner && owner !== userId) {
-          tx.emit({ type: EVENTS.LEAD_ASSIGNED, org_id: orgId, actor_id: userId, data: { owner_user_id: owner, count: ids.length, ...(ids.length === 1 ? { lead_id: ids[0], name: leadName(leads[0]) } : {}), via } });
+        const names = await people.lookup([owner, userId, ...(b.shared_with ?? []), ...leads.flatMap((l) => l.shared_with)]);
+        const moved = [];
+        const addedTo = new Map();
+        for (const lead of leads) {
+          if (lead.owner_user_id !== owner) {
+            via = await handedOver(tx, request.ctx, lead, owner, names);
+            moved.push(lead);
+          }
+          const after = shareList(b.shared_with ?? lead.shared_with, owner);
+          const added = await shareChanged(tx, request.ctx, lead, lead.shared_with.filter((u) => u !== owner), after, names, { notify: false });
+          for (const u of added) addedTo.set(u, [...(addedTo.get(u) ?? []), lead]);
+          await tx.query(`UPDATE leads SET shared_with = $3 WHERE org_id = $1 AND id = $2`, [orgId, lead.id, after]);
         }
+        await tx.query(`UPDATE leads SET owner_user_id = $3, updated_at = now() WHERE org_id = $1 AND id = ANY($2)`, [orgId, ids, owner]);
+        if (owner && owner !== userId && moved.length) {
+          tx.emit({ type: EVENTS.LEAD_ASSIGNED, org_id: orgId, actor_id: userId, data: { owner_user_id: owner, count: moved.length, ...(moved.length === 1 ? { lead_id: moved[0].id, name: leadName(moved[0]) } : {}), via } });
+        }
+        for (const [u, list] of addedTo) sharedNotice(tx, request.ctx, [u], list, names);
+      } else if (b.action === 'share') {
+        const names = await people.lookup([userId, ...b.shared_with]);
+        const addedTo = new Map();
+        for (const lead of leads) {
+          const after = shareList([...lead.shared_with, ...b.shared_with], lead.owner_user_id);
+          const added = await shareChanged(tx, request.ctx, lead, lead.shared_with, after, names, { notify: false });
+          for (const u of added) addedTo.set(u, [...(addedTo.get(u) ?? []), lead]);
+          await tx.query(`UPDATE leads SET shared_with = $3, updated_at = now() WHERE org_id = $1 AND id = $2`, [orgId, lead.id, after]);
+        }
+        for (const [u, list] of addedTo) sharedNotice(tx, request.ctx, [u], list, names);
       } else if (b.action === 'stage') {
         for (const lead of leads) await changeStage(tx, request.ctx, lead, stage.id);
       } else if (b.action === 'tag') {
@@ -783,12 +918,7 @@ export async function leadsAppRoutes(app) {
     const b = request.body;
     await db.transaction(async (tx) => {
       const lead = await loadLead(tx, request.ctx, request.params.id, { lock: true });
-      await tx.query(
-        `UPDATE activities SET completed_at = now(), outcome = COALESCE(outcome, 'done')
-          WHERE org_id = $1 AND related_type = 'lead' AND related_id = $2 AND completed_at IS NULL
-            AND due_at <= now() + interval '1 hour'`,
-        [orgId, lead.id],
-      );
+      await closeDue(tx, orgId, lead.id);
       await log(tx, request.ctx, lead.id, `Call · ${OUTCOMES[b.outcome]}`, {
         kind: 'call', body: b.note?.trim() || null, outcome: b.outcome, duration: b.duration_minutes ?? null,
       });
@@ -815,6 +945,7 @@ export async function leadsAppRoutes(app) {
       const kind = request.body.kind ?? 'note';
       const subject = { note: 'Note', whatsapp: 'WhatsApp message', email: 'Email', meeting: 'Meeting', visit: 'Visit' }[kind];
       await log(tx, request.ctx, lead.id, subject, { kind, body: request.body.body.trim() });
+      await closeDue(tx, request.ctx.orgId, lead.id);
       if (kind !== 'note') await tx.query(`UPDATE leads SET last_contacted_at = now(), status = CASE WHEN status = 'new' THEN 'contacted' ELSE status END WHERE org_id = $1 AND id = $2`, [request.ctx.orgId, lead.id]);
       await tx.query(`UPDATE leads SET updated_at = now() WHERE org_id = $1 AND id = $2`, [request.ctx.orgId, lead.id]);
     });
@@ -846,10 +977,13 @@ export async function leadsAppRoutes(app) {
     const { orgId, userId } = request.ctx;
     const qs = request.query;
     const values = [orgId, tzOf(request)];
-    const where = [`a.org_id = $1`, `$2::text IS NOT NULL`, `a.related_type = 'lead'`, `a.due_at IS NOT NULL`, `l.archived_at IS NULL`];
+    // A won or lost lead is finished: its leftover follow-ups are not work.
+    const where = [`a.org_id = $1`, `$2::text IS NOT NULL`, `a.related_type = 'lead'`, `a.due_at IS NOT NULL`, `l.archived_at IS NULL`, `COALESCE(s.kind, 'open') = 'open'`];
     const owner = seesAll(request.ctx) ? (qs.owner ?? 'me') : 'me';
-    if (owner === 'me') { values.push(userId); where.push(`a.assigned_to = $${values.length}`); }
-    else if (owner !== 'all') { values.push(owner); where.push(`a.assigned_to = $${values.length}`); }
+    // Someone's follow-ups: the ones assigned to them, and every one on a lead they own or share.
+    const theirs = (n) => `(a.assigned_to = $${n} OR l.owner_user_id = $${n} OR $${n} = ANY(l.shared_with))`;
+    if (owner === 'me') { values.push(userId); where.push(theirs(values.length)); }
+    else if (owner !== 'all') { values.push(owner); where.push(theirs(values.length)); }
     const today = `(now() AT TIME ZONE $2)::date`;
     const day = `(a.due_at AT TIME ZONE $2)::date`;
     const buckets = {
@@ -888,11 +1022,11 @@ export async function leadsAppRoutes(app) {
 
   async function loadFollowup(tx, ctx, followupId) {
     const row = await tx.one(
-      `SELECT a.*, l.owner_user_id FROM activities a JOIN leads l ON l.org_id = a.org_id AND l.id = a.related_id
+      `SELECT a.*, l.owner_user_id, l.shared_with FROM activities a JOIN leads l ON l.org_id = a.org_id AND l.id = a.related_id
         WHERE a.org_id = $1 AND a.id = $2 AND a.related_type = 'lead' AND a.due_at IS NOT NULL FOR UPDATE OF a`,
       [ctx.orgId, followupId],
     );
-    if (!row || (!seesAll(ctx) && row.assigned_to !== ctx.userId && row.owner_user_id !== ctx.userId)) throw notFound('Follow-up');
+    if (!row || (!seesAll(ctx) && row.assigned_to !== ctx.userId && !worksOn(row, ctx.userId))) throw notFound('Follow-up');
     return row;
   }
 
@@ -947,8 +1081,12 @@ export async function leadsAppRoutes(app) {
     const me = values.length;
     const row = await db.one(
       `SELECT
-         (SELECT count(*)::int FROM activities a WHERE a.org_id = $1 AND a.related_type = 'lead' AND a.completed_at IS NULL
-             AND a.assigned_to = $${me} AND (a.due_at AT TIME ZONE 'Asia/Kolkata')::date <= (now() AT TIME ZONE 'Asia/Kolkata')::date) AS due,
+         (SELECT count(*)::int FROM activities a JOIN leads l ON l.org_id = a.org_id AND l.id = a.related_id
+                 LEFT JOIN lead_stages s ON s.id = l.stage_id
+           WHERE a.org_id = $1 AND a.related_type = 'lead' AND a.completed_at IS NULL AND a.due_at IS NOT NULL
+             AND l.archived_at IS NULL AND COALESCE(s.kind, 'open') = 'open'
+             AND (a.assigned_to = $${me} OR l.owner_user_id = $${me} OR $${me} = ANY(l.shared_with))
+             AND (a.due_at AT TIME ZONE 'Asia/Kolkata')::date <= (now() AT TIME ZONE 'Asia/Kolkata')::date) AS due,
          (SELECT count(*)::int FROM leads l WHERE l.org_id = $1 AND l.archived_at IS NULL${own ? ` AND ${own}` : ''}
              AND (l.created_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date) AS fresh`,
       values,
@@ -972,11 +1110,11 @@ export async function leadsAppRoutes(app) {
           RETURNING a.id, a.org_id, a.kind, a.body, a.due_at, a.assigned_to, a.related_id`,
       );
       if (!due.length) return;
-      const leads = await db.rows(`SELECT id, first_name, last_name, phone, company_name, owner_user_id FROM leads WHERE id = ANY($1)`, [due.map((d) => d.related_id)]);
+      const leads = await db.rows(`SELECT id, first_name, last_name, phone, company_name, owner_user_id, shared_with FROM leads WHERE id = ANY($1)`, [due.map((d) => d.related_id)]);
       const byId = new Map(leads.map((l) => [l.id, l]));
       for (const f of due) {
         const lead = byId.get(f.related_id);
-        const people = [...new Set([f.assigned_to, lead?.owner_user_id].filter(Boolean))];
+        const people = [...new Set([f.assigned_to, lead?.owner_user_id, ...(lead?.shared_with ?? [])].filter(Boolean))];
         if (!lead || !people.length) continue;
         await db.transaction(async (tx) => {
           tx.emit({

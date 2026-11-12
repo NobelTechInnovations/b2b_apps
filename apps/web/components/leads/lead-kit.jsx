@@ -221,3 +221,30 @@ export function customValue(field, value) {
   if (field?.type === 'date') return new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
   return String(value);
 }
+
+/** Pick teammates by tapping their names: who a lead is shared with. */
+export function PeoplePicker({ team, value, onChange, exclude = [], disabled }) {
+  const chosen = new Set(value ?? []);
+  const people = (team ?? []).filter((m) => !exclude.includes(m.user_id));
+  if (!people.length) return <p className="text-xs text-[var(--text-tertiary)]">No one else can open Leads yet.</p>;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {people.map((m) => (
+        <Chip
+          key={m.user_id}
+          active={chosen.has(m.user_id)}
+          onClick={() => !disabled && onChange(chosen.has(m.user_id) ? [...chosen].filter((u) => u !== m.user_id) : [...chosen, m.user_id])}
+        >
+          {chosen.has(m.user_id) ? '✓ ' : ''}{m.name ?? m.email}
+        </Chip>
+      ))}
+    </div>
+  );
+}
+
+/** "Ravi + 2": a lead's owner and the people it is shared with, in one line. */
+export function sharedLabel(lead) {
+  const shared = lead.shared ?? [];
+  if (!shared.length) return null;
+  return { short: `+${shared.length}`, title: `Shared with ${shared.map((p) => p.name ?? 'a teammate').join(', ')}` };
+}

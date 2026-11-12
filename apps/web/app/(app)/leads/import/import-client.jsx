@@ -86,7 +86,8 @@ export default function ImportClient() {
       };
       if (assign === 'me') body.owner_user_id = user?.id;
       if (assign === 'one') body.owner_user_id = ownerId || null;
-      if (assign === 'round') body.assign_to = pool;
+      if (assign === 'round' || assign === 'all') body.assign_to = pool;
+      if (assign === 'all') body.assign_mode = 'share';
       const response = await api.post('/leads/import', body);
       setResult(response.data);
       toast.success(`${response.data.created} leads imported`);
@@ -111,7 +112,7 @@ export default function ImportClient() {
   const reset = () => { setPreview(null); setCsv(null); setFileName(''); setResult(null); setProblem(null); if (fileRef.current) fileRef.current.value = ''; };
   const targets = preview?.targets ?? [];
   const hasContact = Object.values(mapping).some((t) => ['full_name', 'first_name', 'phone', 'email'].includes(t));
-  const roundReady = assign !== 'round' || pool.length > 0;
+  const roundReady = (assign !== 'round' && assign !== 'all') || pool.length > 0;
 
   // CSV, one Google Sheet tab, or a whole workbook (every tab, fields made automatically).
   const modeSwitch = (
@@ -227,7 +228,8 @@ export default function ImportClient() {
                       <Select {...p} value={assign} onChange={(e) => setAssign(e.target.value)}>
                         <option value="me">Me</option>
                         <option value="one">One person</option>
-                        <option value="round">Share between people (round-robin)</option>
+                        <option value="round">Split between people (round-robin)</option>
+                        <option value="all">Give every lead to several people</option>
                         <option value="none">Nobody yet (assign later)</option>
                       </Select>
                     )}
@@ -257,9 +259,9 @@ export default function ImportClient() {
                     {(p) => <Input {...p} value={name} onChange={(e) => setName(e.target.value)} />}
                   </Field>
                 </div>
-                {assign === 'round' && (
+                {(assign === 'round' || assign === 'all') && (
                   <div>
-                    <p className="mb-2 text-sm font-medium">Share between</p>
+                    <p className="mb-2 text-sm font-medium">{assign === 'all' ? 'Give every lead to all of' : 'Split between'}</p>
                     <div className="flex flex-wrap gap-1.5">
                       {(meta?.team ?? []).map((m) => (
                         <Chip key={m.user_id} active={pool.includes(m.user_id)} onClick={() => setPool((list) => (list.includes(m.user_id) ? list.filter((x) => x !== m.user_id) : [...list, m.user_id]))}>

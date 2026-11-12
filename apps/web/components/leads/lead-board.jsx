@@ -9,7 +9,7 @@ import { useWorkspace } from '@/lib/workspace';
 import { useToast } from '@/components/ui/toast';
 import { Button } from '@/components/ui/button';
 import { Alert, Avatar, Badge, Skeleton } from '@/components/ui/primitives';
-import { OUTCOME_LABEL, OUTCOME_TONE, StageBadge, dueLabel, formName, telLink, whatsappLink } from './lead-kit';
+import { OUTCOME_LABEL, OUTCOME_TONE, StageBadge, dueLabel, formName, sharedLabel, telLink, whatsappLink } from './lead-kit';
 
 /** What the board's columns are. Form / source keeps each form's leads together. */
 export const BOARD_BY = [['form', 'Form / source'], ['stage', 'Stage'], ['owner', 'Owner'], ['followup', 'Follow-up']];
@@ -194,7 +194,7 @@ function LeadCard({ lead, by, onOpen, draggable, onDragStart, onDragEnd }) {
         )}
       </div>
       <div className="mt-1.5 flex items-center gap-1.5 text-2xs text-[var(--text-tertiary)]">
-        {by !== 'owner' && (lead.owner ? <><Avatar name={lead.owner.name ?? '?'} size="xs" /><span className="truncate">{lead.owner.name}</span></> : <span className="text-[var(--color-caution-700)]">Unassigned</span>)}
+        {by !== 'owner' && (lead.owner ? <><Avatar name={lead.owner.name ?? '?'} size="xs" /><span className="truncate" title={sharedLabel(lead)?.title}>{lead.owner.name}{sharedLabel(lead) ? ` ${sharedLabel(lead).short}` : ''}</span></> : <span className="text-[var(--color-caution-700)]">Unassigned</span>)}
         {by !== 'form' && <span className="ml-auto truncate" title={lead.source_detail ?? undefined}>{formName({ value: lead.source_detail ?? lead.source, named: Boolean(lead.source_detail), source: lead.source })}</span>}
       </div>
     </article>

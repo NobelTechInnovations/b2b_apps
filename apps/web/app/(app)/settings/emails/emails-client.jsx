@@ -11,6 +11,7 @@ import { Input, Select } from '@/components/ui/input';
 import { Table, THead, TBody, TH, TR, TD, TableSkeleton } from '@/components/ui/table';
 import { Pagination } from '@/components/data/list-shell';
 import { Card, CardBody, EmptyState, PageHeader, Alert, Badge } from '@/components/ui/primitives';
+import { MailServerCard } from './mail-server';
 
 const STATUS = {
   sent: { tone: 'positive', label: 'Sent' },
@@ -77,7 +78,9 @@ export default function EmailsClient() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Email log" description="Every email this workspace sent — invitations, reminders, quotes — and what the mail service said." />
+      <PageHeader title="Emails" description="The mail server your workspace sends from, and every email it sent — invitations, reminders, quotes — with what the mail service said." />
+
+      <MailServerCard onSaved={load} />
 
       <Card>
         <CardBody className="space-y-3">
@@ -85,9 +88,9 @@ export default function EmailsClient() {
             <Server className="size-4 text-[var(--text-tertiary)]" />
             {here ? (
               here.configured ? (
-                <span className="text-sm">This server (<code>{here.server}</code>) sends through <strong>{here.transport}</strong> as <strong>{here.from}</strong>.</span>
+                <span className="text-sm">Emails go out through <strong>{here.transport}</strong> as <strong>{here.from}</strong>.</span>
               ) : (
-                <span className="text-sm text-[var(--color-caution-700)]">This server (<code>{here.server}</code>) has <strong>no email settings</strong>: its emails are only written to its log.</span>
+                <span className="text-sm text-[var(--color-caution-700)]"><strong>No mail server is set up</strong>: emails are only written to the log of <code>{here.server}</code>. Add one above.</span>
               )
             ) : <span className="text-sm text-[var(--text-tertiary)]">Checking mail settings…</span>}
           </div>

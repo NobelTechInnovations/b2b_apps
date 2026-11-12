@@ -1,7 +1,9 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
-import { badRequest } from '@nexus/service-kit';
+import { badRequest, peopleDirectory } from '@nexus/service-kit';
 import { EVENTS } from '@nexus/contracts/events';
 import { intakeLeads, parseCsv, phoneKey, recordImport } from './lead-intake.js';
+import { activeFields } from './lead-fields.js';
+import { applyColumnChoices, importWorkbook, loadWorkbook, planWorkbook, readTabs } from './lead-workbook.js';
 
 // ── secrets at rest ─────────────────────────────────────────────────────────
 // Access tokens are encrypted with a key derived from the service token. If
@@ -177,6 +179,7 @@ export function intakeOptions(source) {
     mapping: Object.keys(source.field_map ?? {}).length ? source.field_map : null,
     assignTo: source.assign_to ?? [],
     assignCursor: source.assign_cursor ?? 0,
+    shareAll: source.assign_mode === 'share',
     stageId: source.stage_id,
     tags: source.tags ?? [],
   };
@@ -199,7 +202,8 @@ export async function settleSource(db, source, result, extra = {}) {
  * Sheets: every row is identified by its email/phone (or, failing those, its
  * content), so re-reading the whole sheet only ever adds the new rows.
  */
-export async function syncSource(db, source, { serviceToken, actorId = null }) {
+export async function syncSource(db, source, { serviceToken, actorId = null, team = async () => [] }) {
+  if (source.kind === 'google_sheet' && source.config?.mode === 'workbook') return syncWorkbook(db, source, { actorId, team });
   let rows;
   let origin;
   let cursor = null;
@@ -236,9 +240,30 @@ export async function syncSource(db, source, { serviceToken, actorId = null }) {
   return result;
 }
 
+/**
+ * A connected workbook: every tab read again, with the columns treated as
+ * they were chosen when it was connected. New students and new follow-up rows
+ * arrive; ones already in Nexus are left as they are.
+ */
+async function syncWorkbook(db, source, { actorId, team }) {
+  const tabs = readTabs(await loadWorkbook(await fetchSheetWorkbook(source.config.sheet_url)));
+  const plan = await planWorkbook(db, source.org_id, tabs);
+  applyColumnChoices(plan, source.config.columns, new Set((await activeFields(db, source.org_id)).map((f) => `custom.${f.key}`)));
+  if (source.config.skip_followups) plan.followups = null;
+  const result = await importWorkbook(db, {
+    orgId: source.org_id, actorId, tabs, plan, name: source.name, team: await team(source.org_id),
+    ownerId: source.config.owner_user_id ?? null, assignTo: source.assign_to ?? [], shareAll: source.assign_mode === 'share',
+    assignCursor: source.assign_cursor ?? 0, source,
+  });
+  await settleSource(db, source, result);
+  return result;
+}
+
 /** Background: every few minutes, pull sources that are due. One runner per source at a time. */
 export function startSourceSync(app, { everyMs = 5 * 60_000, intervalMinutes = 15 } = {}) {
   const { db, config } = app;
+  const people = peopleDirectory({ tenancyUrl: config.tenancyUrl, serviceToken: config.serviceToken });
+  const team = (orgId) => people.withPermission(orgId, 'leads.leads.view');
   const tick = async () => {
     try {
       const due = await db.rows(
@@ -255,7 +280,7 @@ export function startSourceSync(app, { everyMs = 5 * 60_000, intervalMinutes = 1
       );
       for (const source of due) {
         try {
-          await syncSource(db, source, { serviceToken: config.serviceToken });
+          await syncSource(db, source, { serviceToken: config.serviceToken, team });
         } catch (error) {
           const message = error.expose ? error.message : 'The sync failed. It will be retried.';
           app.log.warn({ err: error, source: source.id }, 'lead source sync failed');

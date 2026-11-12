@@ -5,8 +5,10 @@ import {
 } from '@nexus/service-kit';
 import { FIELD_TYPES, STANDARD_FIELDS, activeFields, ensureStages, fieldKey, suggestMapping } from '../lib/lead-fields.js';
 import { MAX_IMPORT_ROWS, intakeLeads, parseCsv, recordImport } from '../lib/lead-intake.js';
-import { fetchSheet, fetchSheetWorkbook, inspectMetaPage, sealSecret, syncSource, sheetCsvUrl, startSourceSync } from '../lib/lead-sources.js';
-import { importWorkbook, loadWorkbook, planWorkbook, readTabs } from '../lib/lead-workbook.js';
+import {
+  fetchSheet, fetchSheetWorkbook, inspectMetaPage, sealSecret, settleSource, syncSource, sheetCsvUrl, startSourceSync,
+} from '../lib/lead-sources.js';
+import { applyColumnChoices, importWorkbook, loadWorkbook, planWorkbook, readTabs } from '../lib/lead-workbook.js';
 
 const COLORS = ['slate', 'blue', 'sky', 'cyan', 'teal', 'emerald', 'lime', 'amber', 'orange', 'rose', 'pink', 'violet', 'indigo'];
 const TARGET = { type: 'string', pattern: '^(skip|full_name|first_name|last_name|phone|email|company_name|job_title|city|estimated_value|rating|notes|tags|owner_email|stage|custom\\.[a-z][a-z0-9_]{0,39})$' };
@@ -221,6 +223,7 @@ export async function leadsAdminRoutes(app) {
         mapping: mappingSchema,
         owner_user_id: nullable(v.id('usr')),
         assign_to: { type: 'array', items: v.id('usr'), maxItems: 100 },
+        assign_mode: v.enum(['split', 'share']),
         stage_id: nullable(v.id('lstg')),
         tags: { type: 'array', items: v.text(40), maxItems: 10 },
         // Keep a sheet connected, pulling new rows every 15 minutes.
@@ -241,15 +244,15 @@ export async function leadsAdminRoutes(app) {
     let source = null;
     if (b.sheet_url && b.keep_synced) {
       source = await db.one(
-        `INSERT INTO lead_sources (id, org_id, kind, name, config, field_map, assign_to, stage_id, tags, created_by)
-         VALUES ($1,$2,'google_sheet',$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        `INSERT INTO lead_sources (id, org_id, kind, name, config, field_map, assign_to, assign_mode, stage_id, tags, created_by)
+         VALUES ($1,$2,'google_sheet',$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [id('lsrc'), orgId, name, JSON.stringify({ sheet_url: b.sheet_url.trim(), csv_url: sheetCsvUrl(b.sheet_url) }), JSON.stringify(b.mapping),
-          b.assign_to ?? [], b.stage_id ?? null, b.tags ?? [], userId],
+          b.assign_to ?? [], b.assign_mode ?? 'split', b.stage_id ?? null, b.tags ?? [], userId],
       );
     }
 
     const result = source
-      ? await syncSource(db, source, { serviceToken: config.serviceToken, actorId: userId }).catch(async (error) => {
+      ? await syncSource(db, source, { serviceToken: config.serviceToken, actorId: userId, team }).catch(async (error) => {
         // The sheet could not be read: do not leave a broken source behind.
         await db.query(`DELETE FROM lead_sources WHERE org_id = $1 AND id = $2`, [orgId, source.id]);
         throw error;
@@ -257,7 +260,8 @@ export async function leadsAdminRoutes(app) {
       : await intakeLeads(db, {
         orgId, actorId: userId, rows: (await readImport(b)).rows, mapping: b.mapping,
         origin: { leadSource: b.sheet_url ? 'google_sheet' : 'import', detail: `${b.sheet_url ? 'Sheet' : 'CSV'} · ${name}` },
-        ownerId: b.owner_user_id ?? null, assignTo: b.assign_to ?? [], stageId: b.stage_id ?? null, tags: b.tags ?? [],
+        ownerId: b.owner_user_id ?? null, assignTo: b.assign_to ?? [], shareAll: b.assign_mode === 'share',
+        stageId: b.stage_id ?? null, tags: b.tags ?? [],
       });
     const record = source ? null : await recordImport(db, { orgId, kind: b.sheet_url ? 'google_sheet' : 'csv', name, result, actorId: userId });
     return reply.status(201).send({
@@ -320,7 +324,9 @@ export async function leadsAdminRoutes(app) {
         columns: { type: 'array', items: columnChoice, maxItems: 300 },
         owner_user_id: nullable(v.id('usr')),
         assign_to: { type: 'array', items: v.id('usr'), maxItems: 100 },
+        assign_mode: v.enum(['split', 'share']),
         skip_followups: v.bool,
+        keep_synced: v.bool,
       }),
     },
   }, async (request, reply) => {
@@ -331,34 +337,35 @@ export async function leadsAdminRoutes(app) {
     // The plan is made again here from the file itself; the person's choices
     // only change what happens to each column.
     const plan = await planWorkbook(db, orgId, tabs);
-    const fields = new Set((await activeFields(db, orgId)).map((f) => `custom.${f.key}`));
-    for (const choice of b.columns ?? []) {
-      const column = plan.leads.columns.find((c) => c.header === choice.header);
-      if (!column) continue;
-      if (choice.action === 'skip') column.action = 'skip';
-      else if (choice.action === 'map') {
-        const known = STANDARD_FIELDS.some((f) => f.key === choice.target) || fields.has(choice.target);
-        if (!known) throw badRequest(`Choose where “${choice.header}” goes.`);
-        Object.assign(column, { action: 'map', target: choice.target });
-        if (choice.target !== 'stage') delete column.new_stages;
-      } else if (choice.action === 'create') {
-        Object.assign(column, { action: 'create', type: choice.type ?? column.type ?? 'text', label: choice.label ?? column.label ?? choice.header });
-        column.target ??= `custom.${fieldKey(choice.header)}`;
-        if (['select', 'multi_select'].includes(column.type) && !column.options?.length) column.type = 'text';
-      }
-    }
-    const targets = plan.leads.columns.filter((c) => c.action === 'map').map((c) => c.target);
-    const twice = targets.find((t, i) => targets.indexOf(t) !== i);
-    if (twice) throw badRequest(`Two columns are going into the same field (${twice.replace('custom.', '')}). Pick one.`);
+    applyColumnChoices(plan, b.columns, new Set((await activeFields(db, orgId)).map((f) => `custom.${f.key}`)));
     const creates = plan.leads.columns.some((c) => c.action === 'create' || c.new_stages?.length);
     if (creates && !request.ctx.can('leads.settings.manage')) {
       throw badRequest('Creating new fields or stages needs the “Lead sources, fields and stages” ability. Ask an owner, or skip those columns.');
     }
     if (b.skip_followups) plan.followups = null;
 
+    if (b.sheet_url && b.keep_synced) {
+      // A connected sheet: this import, then every tab again each 15 minutes for new students and follow-ups.
+      const name = b.name?.trim() || fileLabel(b);
+      const source = await db.one(
+        `INSERT INTO lead_sources (id, org_id, kind, name, config, assign_to, assign_mode, created_by)
+         VALUES ($1,$2,'google_sheet',$3,$4,$5,$6,$7) RETURNING *`,
+        [id('lsrc'), orgId, name, JSON.stringify({
+          sheet_url: b.sheet_url.trim(), mode: 'workbook', columns: b.columns ?? [], skip_followups: Boolean(b.skip_followups),
+          owner_user_id: b.owner_user_id ?? null,
+        }), b.assign_to ?? [], b.assign_mode ?? 'split', userId],
+      );
+      const result = await importWorkbook(db, {
+        orgId, actorId: userId, tabs, plan, name, team: await team(orgId), ownerId: b.owner_user_id ?? null,
+        assignTo: b.assign_to ?? [], shareAll: b.assign_mode === 'share', source,
+      });
+      await settleSource(db, source, result);
+      return reply.status(201).send({ data: { ...result, source_id: source.id } });
+    }
+
     const result = await importWorkbook(db, {
       orgId, actorId: userId, tabs, plan, name: b.name?.trim() || fileLabel(b),
-      team: await team(orgId), ownerId: b.owner_user_id ?? null, assignTo: b.assign_to ?? [],
+      team: await team(orgId), ownerId: b.owner_user_id ?? null, assignTo: b.assign_to ?? [], shareAll: b.assign_mode === 'share',
     });
     return reply.status(201).send({ data: result });
   });
@@ -411,6 +418,7 @@ export async function leadsAdminRoutes(app) {
     form_ids: { type: 'array', items: { type: 'string', pattern: '^[0-9]{5,30}$' }, maxItems: 100 },
     field_map: mappingSchema,
     assign_to: { type: 'array', items: v.id('usr'), maxItems: 100 },
+    assign_mode: v.enum(['split', 'share']),
     stage_id: nullable(v.id('lstg')),
     tags: { type: 'array', items: v.text(40), maxItems: 10 },
     auto_sync: v.bool,
@@ -443,10 +451,10 @@ export async function leadsAdminRoutes(app) {
       token = newToken();
     }
     const row = await db.one(
-      `INSERT INTO lead_sources (id, org_id, kind, name, config, secret, token, field_map, assign_to, stage_id, tags, auto_sync, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      `INSERT INTO lead_sources (id, org_id, kind, name, config, secret, token, field_map, assign_to, stage_id, tags, auto_sync, created_by, assign_mode)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
       [id('lsrc'), orgId, b.kind, b.name.trim(), JSON.stringify(configJson), secret, token, JSON.stringify(fieldMap),
-        b.assign_to ?? [], b.stage_id ?? null, b.tags ?? [], b.auto_sync ?? true, userId],
+        b.assign_to ?? [], b.stage_id ?? null, b.tags ?? [], b.auto_sync ?? true, userId, b.assign_mode ?? 'split'],
     );
     return reply.status(201).send({ data: present(row) });
   });
@@ -484,11 +492,12 @@ export async function leadsAdminRoutes(app) {
     const row = await db.one(
       `UPDATE lead_sources SET name = COALESCE($3, name), config = $4, secret = $5, field_map = COALESCE($6, field_map),
               assign_to = COALESCE($7, assign_to), stage_id = CASE WHEN $8 THEN $9 ELSE stage_id END, tags = COALESCE($10, tags),
-              auto_sync = COALESCE($11, auto_sync),
+              auto_sync = COALESCE($11, auto_sync), assign_mode = COALESCE($13, assign_mode),
               status = COALESCE($12, CASE WHEN $5 IS DISTINCT FROM secret THEN 'active' ELSE status END), updated_at = now()
         WHERE org_id = $1 AND id = $2 RETURNING *`,
       [orgId, source.id, b.name?.trim() ?? null, JSON.stringify(configJson), secret, b.field_map ? JSON.stringify(b.field_map) : null,
-        b.assign_to ?? null, b.stage_id !== undefined, b.stage_id ?? null, b.tags ?? null, b.auto_sync ?? null, b.status ?? null],
+        b.assign_to ?? null, b.stage_id !== undefined, b.stage_id ?? null, b.tags ?? null, b.auto_sync ?? null, b.status ?? null,
+        b.assign_mode ?? null],
     );
     return { data: present(row) };
   });
@@ -511,7 +520,7 @@ export async function leadsAdminRoutes(app) {
       throw badRequest('A sync is already running for this source. Give it a minute.');
     }
     try {
-      const result = await syncSource(db, source, { serviceToken: config.serviceToken, actorId: userId });
+      const result = await syncSource(db, source, { serviceToken: config.serviceToken, actorId: userId, team });
       return { data: { total: result.total, created: result.created, duplicates: result.duplicates, failed: result.failed, errors: result.errors } };
     } catch (error) {
       await db.query(

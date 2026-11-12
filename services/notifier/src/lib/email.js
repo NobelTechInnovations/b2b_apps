@@ -2,6 +2,7 @@ import os from 'node:os';
 import nodemailer from 'nodemailer';
 import { id } from '@nexus/db-kit';
 import { EVENTS } from '@nexus/contracts/events';
+import { workspaceMailer } from './mail-settings.js';
 
 /**
  * Email delivery.
@@ -113,7 +114,7 @@ const TEMPLATES = {
 };
 
 // A mail server that never answers must not hold the queue for minutes.
-const TIMEOUTS = { connectionTimeout: 15_000, greetingTimeout: 10_000, socketTimeout: 30_000 };
+export const TIMEOUTS = { connectionTimeout: 15_000, greetingTimeout: 10_000, socketTimeout: 30_000 };
 
 export function smtpTransport(config) {
   if (config.smtpUrl) return nodemailer.createTransport(config.smtpUrl, TIMEOUTS);
@@ -215,6 +216,26 @@ export function createEmailSender({ config, db, logger }) {
   else logger.info({ via: label, from: config.mailFrom }, 'email delivery configured');
 
   /**
+   * Who sends for a workspace: its own mail server when an owner set one up
+   * (Settings → Emails), else this server's. Account emails (confirm address,
+   * reset password) belong to no workspace; with no server-wide settings they
+   * go through the mail server a workspace set up most recently.
+   */
+  const chosen = new Map();
+  async function mailerFor(orgId) {
+    const key = orgId ?? '';
+    const hit = chosen.get(key);
+    if (hit && hit.at > Date.now() - 60_000) return hit.mailer;
+    let row = orgId ? await db.one(`SELECT * FROM mail_settings WHERE org_id = $1 AND enabled`, [orgId]) : null;
+    if (!row && !orgId && !mailer) row = await db.one(`SELECT * FROM mail_settings WHERE enabled ORDER BY updated_at DESC LIMIT 1`);
+    const own = row ? workspaceMailer(row, config.serviceToken) : null;
+    if (row && !own) logger.warn({ org: row.org_id }, 'the saved mail password can no longer be read; enter it again in Settings → Emails');
+    const picked = own ?? mailer;
+    chosen.set(key, { at: Date.now(), mailer: picked });
+    return picked;
+  }
+
+  /**
    * Send one email and keep a record of what happened: sent (with the
    * provider's reply), failed (with its error), retrying, or only logged —
    * and on which server, through which mail service.
@@ -225,11 +246,13 @@ export function createEmailSender({ config, db, logger }) {
     // A link that old has expired anyway; never mail stale history.
     if (occurredAt && Date.now() - new Date(occurredAt).getTime() > 24 * 3_600_000) return null;
     const reserved = RESERVED.test(to.split('@')[1] ?? '');
-    const deliver = Boolean(mailer) && !reserved;
-    const message = render(data ?? {});
+    const active = await mailerFor(orgId);
+    const label = active?.label ?? null;
+    const deliver = Boolean(active) && !reserved;
+    const message = render({ ...(data ?? {}), ...(template === 'test' ? { transport: label ?? 'none' } : {}) });
     const why = reserved
       ? 'Test address: never sent, only written to the log.'
-      : `This server (${SERVER}) has no email settings (SMTP or ZeptoMail), so the email was written to its log instead of being sent.`;
+      : `No mail server is set up (Settings → Emails, or this server's SMTP settings), so the email was written to the log of ${SERVER} instead of being sent.`;
     // Claim the (event, address) first: a redelivery finds it taken and stops,
     // unless the earlier attempt is waiting to be retried.
     const claimed = await db.one(
@@ -250,7 +273,7 @@ export function createEmailSender({ config, db, logger }) {
       return { id: claimed.id, status: 'logged', error: why, transport: label, server: SERVER };
     }
     try {
-      const info = await mailer.send({ to, subject: message.subject, text: message.text, html: message.html });
+      const info = await active.send({ to, subject: message.subject, text: message.text, html: message.html });
       const reply = String(info.response ?? '').slice(0, 500);
       await db.query(
         `UPDATE emails SET status = 'sent', provider_id = $2, response = $3, error = NULL, updated_at = now() WHERE id = $1`,
@@ -283,12 +306,21 @@ export function createEmailSender({ config, db, logger }) {
 
   /** Send a test message now and say exactly what the mail service answered. */
   async function sendTest({ to, orgId, data }) {
-    return send({ eventId: `test_${id('evt')}`, to, template: 'test', data: { ...data, transport: label ?? 'none', server: SERVER }, orgId, retry: false });
+    return send({ eventId: `test_${id('evt')}`, to, template: 'test', data: { ...data, server: SERVER }, orgId, retry: false });
+  }
+
+  /** How a workspace's email goes out right now. */
+  async function describe(orgId) {
+    const active = await mailerFor(orgId);
+    return { transport: active?.label ?? null, from: active?.from ?? config.mailFrom, configured: Boolean(active) };
   }
 
   return {
     send,
     sendTest,
+    describe,
+    /** Forget the cached choice after a workspace changes its mail settings. */
+    forget: () => chosen.clear(),
     transport: label,
     server: SERVER,
     from: config.mailFrom,

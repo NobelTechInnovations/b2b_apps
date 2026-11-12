@@ -285,7 +285,40 @@ export function sheetMoment(text) {
   return Number.isNaN(at.getTime()) ? null : at;
 }
 
-export async function importWorkbook(db, { orgId, actorId, tabs, plan, name, team, assignTo = [], ownerId = null }) {
+/**
+ * Someone's choices for the leads tab's columns (map / create / skip), laid
+ * over a fresh plan of the same file. `targets` are the fields that exist.
+ */
+export function applyColumnChoices(plan, choices, targets) {
+  for (const choice of choices ?? []) {
+    const column = plan.leads.columns.find((c) => c.header === choice.header);
+    if (!column) continue;
+    if (choice.action === 'skip') column.action = 'skip';
+    else if (choice.action === 'map') {
+      const known = STANDARD_FIELDS.some((f) => f.key === choice.target) || targets.has(choice.target);
+      if (!known) throw badRequest(`Choose where “${choice.header}” goes.`);
+      Object.assign(column, { action: 'map', target: choice.target });
+      if (choice.target !== 'stage') delete column.new_stages;
+    } else if (choice.action === 'create') {
+      Object.assign(column, { action: 'create', type: choice.type ?? column.type ?? 'text', label: choice.label ?? column.label ?? choice.header });
+      column.target ??= `custom.${fieldKey(choice.header)}`;
+      if (['select', 'multi_select'].includes(column.type) && !column.options?.length) column.type = 'text';
+    }
+  }
+  const mapped = plan.leads.columns.filter((c) => c.action === 'map').map((c) => c.target);
+  const twice = mapped.find((t, i) => mapped.indexOf(t) !== i);
+  if (twice) throw badRequest(`Two columns are going into the same field (${twice.replace('custom.', '')}). Pick one.`);
+  return plan;
+}
+
+/**
+ * Write a planned workbook: fields and stages, leads, then follow-ups. Run
+ * again on the same workbook (a re-upload, or a connected sheet's sync) it
+ * adds only the new students and the new follow-up rows.
+ */
+export async function importWorkbook(db, {
+  orgId, actorId, tabs, plan, name, team, assignTo = [], ownerId = null, shareAll = false, assignCursor = 0, source = null,
+}) {
   const leadsTab = tabs.find((t) => t.name === plan.leads.tab);
   if (!leadsTab) throw badRequest('The leads tab is no longer in the file. Upload it again.');
   const columns = plan.leads.columns;
@@ -346,9 +379,10 @@ export async function importWorkbook(db, { orgId, actorId, tabs, plan, name, tea
   const key = plan.leads.key;
   const namespace = `xl:${squash(plan.leads.tab)}:${squash(key ?? '')}`;
   const result = await intakeLeads(db, {
-    orgId, actorId, rows: leadsTab.rows, mapping, ownersByEmail: owners, ownerId, assignTo,
+    orgId, actorId, rows: leadsTab.rows, mapping, ownersByEmail: owners, ownerId, assignTo, shareAll, assignCursor,
+    stageId: source?.stage_id ?? null, tags: source?.tags ?? [],
     origin: {
-      leadSource: 'import', detail: `Excel · ${name}`,
+      leadSource: source ? 'google_sheet' : 'import', sourceId: source?.id ?? null, detail: source ? `Sheet · ${source.name}` : `Excel · ${name}`,
       extKey: (raw) => (key && raw[key] ? `${namespace}:${String(raw[key]).trim().toLowerCase()}` : null),
     },
   });
@@ -411,10 +445,19 @@ export async function importWorkbook(db, { orgId, actorId, tabs, plan, name, tea
           if (inserted) followSummary.imported += 1; else followSummary.duplicates += 1;
           touched.add(lead.id);
         }
-        // A next date still ahead, on a follow-up that is not closed, becomes a scheduled one.
+        // The next date of a follow-up that is still open becomes a scheduled one (overdue if it has
+        // passed); once the row says Closed, that scheduled follow-up is done.
         const next = sheetMoment(row[roles.next_date]);
         const closed = /closed|done|complete|cancel/i.test(row[roles.status] ?? '');
-        if (next && !closed && next.getTime() > Date.now() - 86_400_000) {
+        if (next && closed) {
+          const shut = await tx.query(
+            `UPDATE activities SET completed_at = now(), outcome = COALESCE(outcome, 'done')
+              WHERE org_id = $1 AND related_type = 'lead' AND related_id = $2 AND due_at = $3 AND completed_at IS NULL`,
+            [orgId, lead.id, next],
+          );
+          if (shut.rowCount) touched.add(lead.id);
+        }
+        if (next && !closed) {
           const subject = `${KIND_LABEL[kind]} · ${row[roles.next_action] ?? 'Follow up'}`.slice(0, 300);
           const scheduled = await tx.one(
             `INSERT INTO activities (id, org_id, kind, subject, body, related_type, related_id, due_at, assigned_to, created_by)
@@ -428,6 +471,20 @@ export async function importWorkbook(db, { orgId, actorId, tabs, plan, name, tea
           if (scheduled) followSummary.scheduled += 1;
           touched.add(lead.id);
         }
+      }
+      // A follow-up due on or before the day the student was last contacted has been done.
+      if (touched.size) {
+        await tx.query(
+          `UPDATE activities a SET completed_at = now(), outcome = COALESCE(a.outcome, 'done')
+             FROM (SELECT related_id, max(completed_at) AS last_touch FROM activities
+                    WHERE org_id = $1 AND related_type = 'lead' AND related_id = ANY($2) AND completed_at IS NOT NULL
+                      AND due_at IS NULL AND kind <> 'update'
+                    GROUP BY related_id) t
+            WHERE a.org_id = $1 AND a.related_type = 'lead' AND a.related_id = t.related_id AND a.completed_at IS NULL
+              AND a.due_at IS NOT NULL
+              AND (a.due_at AT TIME ZONE 'Asia/Kolkata')::date <= (t.last_touch AT TIME ZONE 'Asia/Kolkata')::date`,
+          [orgId, [...touched]],
+        );
       }
       // Each touched lead's call count, last call and next follow-up, from its timeline.
       if (touched.size) {
@@ -452,9 +509,13 @@ export async function importWorkbook(db, { orgId, actorId, tabs, plan, name, tea
     });
   }
 
-  const record = await recordImport(db, { orgId, kind: 'csv', name: `Excel · ${name}`, result, actorId });
+  // A connected sheet's quiet sync (nothing new) leaves no entry in the import history.
+  const quiet = source && !actorId && !result.created && !result.failed && !followSummary.imported && !followSummary.scheduled;
+  const record = quiet ? null : await recordImport(db, {
+    orgId, sourceId: source?.id ?? null, kind: source ? 'google_sheet' : 'csv', name: source ? `Sheet · ${source.name}` : `Excel · ${name}`, result, actorId,
+  });
   return {
-    id: record.id, total: result.total, created: result.created, duplicates: result.duplicates, failed: result.failed, errors: result.errors,
+    id: record?.id ?? null, assignCursor: result.assignCursor, total: result.total, created: result.created, duplicates: result.duplicates, failed: result.failed, errors: result.errors,
     fields_created: created.fields, stages_created: created.stages, followups: followSummary,
   };
 }

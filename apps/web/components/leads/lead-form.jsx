@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Field, Select, Textarea } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { Alert } from '@/components/ui/primitives';
-import { CustomFieldInput, FollowupPicker, SOURCE_LABEL } from './lead-kit';
+import { CustomFieldInput, FollowupPicker, PeoplePicker, SOURCE_LABEL } from './lead-kit';
 
 const MANUAL_SOURCES = ['manual', 'walk_in', 'cold_call', 'referral', 'website', 'whatsapp', 'event', 'campaign', 'partner'];
 
@@ -36,17 +36,19 @@ export function LeadFormModal({ open, lead, meta, onClose, onSaved, onOpenExisti
     setFollowup(null);
     setForm(editing ? {
       full_name: lead.name ?? '', phone: lead.phone ?? '', email: lead.email ?? '', company_name: lead.company_name ?? '',
-      city: lead.city ?? '', stage_id: lead.stage_id ?? '', owner_user_id: lead.owner_user_id ?? '', source: lead.source ?? 'manual',
+      city: lead.city ?? '', stage_id: lead.stage_id ?? '', owner_user_id: lead.owner_user_id ?? '', shared_with: lead.shared_with ?? [], source: lead.source ?? 'manual',
       rating: lead.rating ?? '', estimated_value: lead.estimated_value ?? '', tags: (lead.tags ?? []).join(', '),
       notes: lead.notes ?? '', job_title: lead.job_title ?? '', custom: { ...(lead.custom ?? {}) },
     } : {
-      source: 'manual', stage_id: meta?.stages?.find((s) => s.kind === 'open')?.id ?? '', owner_user_id: user?.id ?? '', custom: {},
+      source: 'manual', stage_id: meta?.stages?.find((s) => s.kind === 'open')?.id ?? '', owner_user_id: user?.id ?? '', shared_with: [], custom: {},
     });
   }, [open, editing, lead, meta, user]);
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
   const setCustom = (key, value) => setForm((f) => ({ ...f, custom: { ...f.custom, [key]: value } }));
   const canAssign = can('leads.leads.assign');
+  // Managers share any lead; anyone shares a lead they own (a new one is theirs).
+  const canShare = canAssign || !editing || lead?.owner_user_id === user?.id;
 
   async function submit(event, allowDuplicate = false) {
     event?.preventDefault();
@@ -70,6 +72,7 @@ export function LeadFormModal({ open, lead, meta, onClose, onSaved, onOpenExisti
         stage_id: form.stage_id || undefined,
       };
       if (canAssign) payload.owner_user_id = form.owner_user_id || null;
+      if (canShare) payload.shared_with = (form.shared_with ?? []).filter((u) => u !== (canAssign ? form.owner_user_id : lead?.owner_user_id ?? user?.id));
       if (editing && !payload.full_name) delete payload.full_name;
       let saved;
       if (editing) {
@@ -161,6 +164,18 @@ export function LeadFormModal({ open, lead, meta, onClose, onSaved, onOpenExisti
                 </Select>
               )}
             </Field>
+          )}
+          {canShare && (meta?.team?.length ?? 0) > 1 && (
+            <div className="sm:col-span-2">
+              <p className="mb-1.5 text-sm font-medium">Also share with</p>
+              <PeoplePicker
+                team={meta?.team}
+                value={form.shared_with}
+                exclude={[canAssign ? form.owner_user_id : lead?.owner_user_id ?? user?.id].filter(Boolean)}
+                onChange={(shared) => setForm((f) => ({ ...f, shared_with: shared }))}
+              />
+              <p className="mt-1 text-xs text-[var(--text-tertiary)]">They see this lead in their list too, can call it and book follow-ups.</p>
+            </div>
           )}
           <Field label="Source">
             {(p) => (
